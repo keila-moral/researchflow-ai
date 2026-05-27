@@ -1,0 +1,133 @@
+{
+    "name": "Arxiv Semantic Search",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "search-papers",
+                "options": {}
+            },
+            "id": "webhook-id",
+            "name": "Webhook Trigger",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1.1,
+            "position": [
+                200,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "options": {}
+            },
+            "id": "agent-id",
+            "name": "AI Agent",
+            "type": "n8n-nodes-base.aiAgent",
+            "typeVersion": 1.1,
+            "position": [
+                400,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "model": "gpt-4o",
+                "options": {}
+            },
+            "id": "openai-id",
+            "name": "OpenAI Chat Model",
+            "type": "n8n-nodes-base.lmChatOpenAi",
+            "typeVersion": 1,
+            "position": [
+                400,
+                500
+            ],
+            "credentials": {
+                "openAiApi": {
+                    "id": "openai-cred-id"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "collection": "arxiv_papers"
+            },
+            "id": "qdrant-id",
+            "name": "Qdrant Retriever",
+            "type": "n8n-nodes-base.qdrantVectorStore",
+            "typeVersion": 1,
+            "position": [
+                600,
+                500
+            ],
+            "credentials": {
+                "qdrantApi": {
+                    "id": "qdrant-cred-id"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "options": {}
+            },
+            "id": "buffer-id",
+            "name": "Window Buffer Memory",
+            "type": "n8n-nodes-base.memoryWindowBuffer",
+            "typeVersion": 1,
+            "position": [
+                250,
+                500
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "OpenAI Chat Model": {
+            "ai_languageModel": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "ai_languageModel",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Qdrant Retriever": {
+            "ai_tool": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "ai_tool",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Window Buffer Memory": {
+            "ai_memory": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "ai_memory",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    }
+}

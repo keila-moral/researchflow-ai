@@ -1,0 +1,175 @@
+{
+    "name": "Arxiv Monitor & Process",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 9 * * *"
+                        }
+                    ]
+                }
+            },
+            "id": "trigger-id",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.1,
+            "position": [
+                200,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "https://export.arxiv.org/api/query",
+                "options": {},
+                "queryParametersUi": {
+                    "parameter": [
+                        {
+                            "name": "search_query",
+                            "value": "cat:cs.AI"
+                        },
+                        {
+                            "name": "sortBy",
+                            "value": "submittedDate"
+                        },
+                        {
+                            "name": "sortOrder",
+                            "value": "descending"
+                        },
+                        {
+                            "name": "max_results",
+                            "value": "10"
+                        }
+                    ]
+                }
+            },
+            "id": "arxiv-fetch-id",
+            "name": "Fetch Arxiv",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                400,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "mode": "runOnceForEachItem",
+                "jsCode": "const xml = $input.item.json.body;\n// n8n handles XML to JSON if the response is valid XML\n// This node is for post-processing if needed\nreturn $input.item;"
+            },
+            "id": "code-process-id",
+            "name": "Process Results",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                600,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "model": "gpt-4o",
+                "prompt": "Summarize the following research paper abstract into 3 bullet points:\n\nTitle: {{ $json.title }}\nAbstract: {{ $json.summary }}",
+                "options": {}
+            },
+            "id": "llm-summarize-id",
+            "name": "OpenAI Summarize",
+            "type": "n8n-nodes-base.openAi",
+            "typeVersion": 1,
+            "position": [
+                800,
+                300
+            ],
+            "credentials": {
+                "openAiApi": {
+                    "id": "openai-cred-id"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "mode": "upsert",
+                "collection": "arxiv_papers",
+                "text": "={{ $json.summary }}",
+                "metadata": {
+                    "metadataValues": [
+                        {
+                            "name": "title",
+                            "value": "={{ $json.title }}"
+                        },
+                        {
+                            "name": "url",
+                            "value": "={{ $json.id }}"
+                        }
+                    ]
+                }
+            },
+            "id": "qdrant-store-id",
+            "name": "Qdrant Store",
+            "type": "n8n-nodes-base.qdrantVectorStore",
+            "typeVersion": 1,
+            "position": [
+                1000,
+                300
+            ],
+            "credentials": {
+                "qdrantApi": {
+                    "id": "qdrant-cred-id"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch Arxiv",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Arxiv": {
+            "main": [
+                [
+                    {
+                        "node": "Process Results",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Process Results": {
+            "main": [
+                [
+                    {
+                        "node": "OpenAI Summarize",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "OpenAI Summarize": {
+            "main": [
+                [
+                    {
+                        "node": "Qdrant Store",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    }
+}
