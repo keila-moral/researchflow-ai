@@ -3,7 +3,7 @@
 Once the basic flow is running successfully, here are several ways to optimize and enhance the system for better performance and more professional results.
 
 ## 🚀 Performance & Reliability
-- [ ] **Data Deduplication**: Add a check in n8n (using a "Filter" node or Qdrant lookup) to ensure the same paper isn't processed twice if the arXiv API returns it again.
+- [x] **Data Deduplication**: Add a check in n8n (using a "Filter" node or Qdrant lookup) to ensure the same paper isn't processed twice if the arXiv API returns it again.
 - [ ] **Error Handling**: Add "Error Trigger" workflows in n8n to notify you via Telegram/email if the OpenAI API fails or if arXiv is down.
 - [ ] **Rate Limiting**: arXiv API has a strict 3-second delay policy. Ensure the workflow doesn't hammer the API if fetching multiple categories.
 
