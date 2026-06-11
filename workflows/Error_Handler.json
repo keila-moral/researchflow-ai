@@ -1,0 +1,83 @@
+{
+    "name": "Error Handler",
+    "nodes": [
+        {
+            "parameters": {},
+            "id": "error-trigger-id",
+            "name": "Error Trigger",
+            "type": "n8n-nodes-base.errorTrigger",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "chatId": "YOUR_TELEGRAM_CHAT_ID",
+                "text": "=🚨 *n8n Workflow Error Alert* 🚨\n\n*Workflow:* {{ $json.workflow.name }}\n*Node:* {{ $json.node.name || 'Unknown' }}\n*Error:* {{ $json.error.message }}\n*Execution:* [View Execution]({{ $json.execution.url }})",
+                "additionalFields": {
+                    "parse_mode": "Markdown"
+                }
+            },
+            "id": "telegram-notify-id",
+            "name": "Telegram Notification",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1.1,
+            "position": [
+                500,
+                200
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "telegram-cred-id"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "fromEmail": "n8n-alerts@example.com",
+                "toEmail": "your-email@example.com",
+                "subject": "=🚨 n8n Workflow Error: {{ $json.workflow.name }}",
+                "emailFormat": "html",
+                "html": "=<p><strong>n8n Workflow Error Alert</strong></p><p><strong>Workflow:</strong> {{ $json.workflow.name }}<br><strong>Node:</strong> {{ $json.node.name || 'Unknown' }}<br><strong>Error:</strong> {{ $json.error.message }}<br><strong>Execution:</strong> <a href=\"{{ $json.execution.url }}\">View Execution</a></p>"
+            },
+            "id": "email-notify-id",
+            "name": "Email Notification",
+            "type": "n8n-nodes-base.emailSend",
+            "typeVersion": 2,
+            "position": [
+                500,
+                400
+            ],
+            "credentials": {
+                "smtp": {
+                    "id": "smtp-cred-id"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Error Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Telegram Notification",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Email Notification",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "id": "error-handler-workflow-id"
+}
