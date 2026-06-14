@@ -17,8 +17,49 @@
             "type": "n8n-nodes-base.scheduleTrigger",
             "typeVersion": 1.1,
             "position": [
-                200,
+                100,
                 300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "return [\n  { json: { category: \"cs.AI\" } },\n  { json: { category: \"cs.LG\" } },\n  { json: { category: \"cs.CV\" } }\n];"
+            },
+            "id": "define-categories-id",
+            "name": "Define Categories",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "batchSize": 1,
+                "options": {}
+            },
+            "id": "loop-categories-id",
+            "name": "Loop Categories",
+            "type": "n8n-nodes-base.splitInBatches",
+            "typeVersion": 3,
+            "position": [
+                400,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "amount": 3,
+                "unit": "seconds"
+            },
+            "id": "wait-id",
+            "name": "Wait",
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1,
+            "position": [
+                550,
+                180
             ]
         },
         {
@@ -29,7 +70,7 @@
                     "parameter": [
                         {
                             "name": "search_query",
-                            "value": "cat:cs.AI"
+                            "value": "=cat:{{ $json.category }}"
                         },
                         {
                             "name": "sortBy",
@@ -51,22 +92,36 @@
             "type": "n8n-nodes-base.httpRequest",
             "typeVersion": 4.1,
             "position": [
-                400,
-                300
+                700,
+                180
             ]
         },
         {
             "parameters": {
                 "mode": "runOnceForEachItem",
-                "jsCode": "const xml = $input.item.json.body;\n// n8n handles XML to JSON if the response is valid XML\n// This node is for post-processing if needed\nreturn $input.item;"
+                "jsCode": "const data = $input.item.json.body || $input.item.json;\nconst feed = data.feed;\nconst entries = feed?.entry || [];\nconst entryList = Array.isArray(entries) ? entries : (entries ? [entries] : []);\n\nreturn entryList.map(entry => {\n  const title = typeof entry.title === 'string' ? entry.title.replace(/\\n/g, ' ') : (entry.title?.['#text'] || '').replace(/\\n/g, ' ');\n  const summary = typeof entry.summary === 'string' ? entry.summary.replace(/\\n/g, ' ') : (entry.summary?.['#text'] || '').replace(/\\n/g, ' ');\n  return {\n    json: {\n      id: entry.id,\n      title: title.trim(),\n      summary: summary.trim(),\n      published: entry.published,\n      link: Array.isArray(entry.link) ? entry.link[0]?.['@_href'] : entry.link?.['@_href'] || entry.link || entry.id\n    }\n  };\n});"
             },
             "id": "code-process-id",
             "name": "Process Results",
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [
-                600,
-                300
+                850,
+                180
+            ]
+        },
+        {
+            "parameters": {
+                "mode": "runOnceForAllItems",
+                "jsCode": "const allPapers = [];\nlet runIndex = 0;\nwhile (true) {\n  try {\n    const items = $('Process Results').all(0, runIndex);\n    if (!items || items.length === 0) {\n      break;\n    }\n    allPapers.push(...items);\n    runIndex++;\n  } catch (error) {\n    break;\n  }\n}\nreturn allPapers;"
+            },
+            "id": "merge-papers-id",
+            "name": "Merge Papers",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                550,
+                420
             ]
         },
         {
@@ -78,8 +133,8 @@
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [
-                800,
-                300
+                700,
+                420
             ]
         },
         {
@@ -111,8 +166,8 @@
             "type": "n8n-nodes-base.filter",
             "typeVersion": 2.2,
             "position": [
-                1000,
-                300
+                850,
+                420
             ]
         },
         {
@@ -126,8 +181,8 @@
             "type": "n8n-nodes-base.openAi",
             "typeVersion": 1,
             "position": [
-                1200,
-                300
+                1000,
+                420
             ],
             "credentials": {
                 "openAiApi": {
@@ -158,8 +213,8 @@
             "type": "n8n-nodes-base.qdrantVectorStore",
             "typeVersion": 1,
             "position": [
-                1400,
-                300
+                1150,
+                420
             ],
             "credentials": {
                 "qdrantApi": {
@@ -170,6 +225,46 @@
     ],
     "connections": {
         "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Define Categories",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Define Categories": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Categories",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Loop Categories": {
+            "main": [
+                [
+                    {
+                        "node": "Wait",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Merge Papers",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait": {
             "main": [
                 [
                     {
@@ -192,6 +287,17 @@
             ]
         },
         "Process Results": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Categories",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Merge Papers": {
             "main": [
                 [
                     {
