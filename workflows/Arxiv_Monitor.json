@@ -173,7 +173,20 @@
         {
             "parameters": {
                 "model": "gpt-4o",
-                "prompt": "Summarize the following research paper abstract into 3 bullet points:\n\nTitle: {{ $json.title }}\nAbstract: {{ $json.summary }}",
+                "prompt": "You are a research assistant for an AI/ML monitoring pipeline called ResearchFlow. Your job is to help developers and researchers quickly assess new arXiv papers.
+
+Given the paper below, produce a structured summary with these sections:
+🔍 **What it does** (1–2 sentences on the core contribution)
+⚙️ **How it works** (1–2 sentences on the method or architecture)
+📌 **Why it matters** (1 sentence on practical or research significance)
+🏷️ **Relevance** (rate Low / Medium / High for someone working on LLMs, RAG systems, or AI automation pipelines)
+
+Title: {{ $json.title }}
+Category: {{ $json.category }}
+Abstract: {{ $json.summary }}
+Paper link: {{ $json.link }}
+
+Keep the summary concise and technical but accessible.",
                 "options": {}
             },
             "id": "llm-summarize-id",
