@@ -30,7 +30,7 @@ This is the core automation workflow. It handles the "Fetch -> Summarize -> Stor
 3.  **Process Results (Code Node)**: A simple pass-through or normalization step to ensure the data structure is ready for the LLM.
 4.  **OpenAI Summarize (AI Node)**:
     - **Model**: GPT-4o.
-    - **Prompt**: Takes the title and abstract and condenses them into 3 key bullet points. This makes it "LinkedIn ready."
+    - **Prompt**: Each paper is processed by GPT-4o using a structured prompt that extracts the core contribution, methodology, and practical significance, then rates its relevance for developers working on LLMs, RAG systems, or AI automation pipelines.
 5.  **Qdrant Store (Vector Store Node)**:
     - **Action**: Upserts the paper abstract and metadata into a Qdrant collection named `arxiv_papers`.
     - **Embeddings**: Uses OpenAI embeddings to turn text into vectors for semantic search.
