@@ -1,363 +1,379 @@
 {
-    "name": "Arxiv Monitor & Process",
-    "nodes": [
-        {
-            "parameters": {
-                "rule": {
-                    "interval": [
-                        {
-                            "field": "cronExpression",
-                            "expression": "0 9 * * *"
-                        }
-                    ]
-                }
-            },
-            "id": "trigger-id",
-            "name": "Schedule Trigger",
-            "type": "n8n-nodes-base.scheduleTrigger",
-            "typeVersion": 1.1,
-            "position": [
-                100,
-                300
-            ]
-        },
-        {
-            "parameters": {
-                "jsCode": "return [\n  { json: { category: \"cs.AI\" } },\n  { json: { category: \"cs.LG\" } },\n  { json: { category: \"cs.CV\" } }\n];"
-            },
-            "id": "define-categories-id",
-            "name": "Define Categories",
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [
-                250,
-                300
-            ]
-        },
-        {
-            "parameters": {
-                "batchSize": 1,
-                "options": {}
-            },
-            "id": "loop-categories-id",
-            "name": "Loop Categories",
-            "type": "n8n-nodes-base.splitInBatches",
-            "typeVersion": 3,
-            "position": [
-                400,
-                300
-            ]
-        },
-        {
-            "parameters": {
-                "amount": 3,
-                "unit": "seconds"
-            },
-            "id": "wait-id",
-            "name": "Wait",
-            "type": "n8n-nodes-base.wait",
-            "typeVersion": 1,
-            "position": [
-                550,
-                180
-            ]
-        },
-        {
-            "parameters": {
-                "url": "https://export.arxiv.org/api/query",
-                "options": {},
-                "queryParametersUi": {
-                    "parameter": [
-                        {
-                            "name": "search_query",
-                            "value": "=cat:{{ $json.category }}"
-                        },
-                        {
-                            "name": "sortBy",
-                            "value": "submittedDate"
-                        },
-                        {
-                            "name": "sortOrder",
-                            "value": "descending"
-                        },
-                        {
-                            "name": "max_results",
-                            "value": "10"
-                        }
-                    ]
-                }
-            },
-            "id": "arxiv-fetch-id",
-            "name": "Fetch Arxiv",
-            "type": "n8n-nodes-base.httpRequest",
-            "typeVersion": 4.1,
-            "position": [
-                700,
-                180
-            ]
-        },
-        {
-            "parameters": {
-                "mode": "runOnceForEachItem",
-                "jsCode": "const data = $input.item.json.body || $input.item.json;\nconst feed = data.feed;\nconst entries = feed?.entry || [];\nconst entryList = Array.isArray(entries) ? entries : (entries ? [entries] : []);\n\nreturn entryList.map(entry => {\n  const title = typeof entry.title === 'string' ? entry.title.replace(/\\n/g, ' ') : (entry.title?.['#text'] || '').replace(/\\n/g, ' ');\n  const summary = typeof entry.summary === 'string' ? entry.summary.replace(/\\n/g, ' ') : (entry.summary?.['#text'] || '').replace(/\\n/g, ' ');\n  return {\n    json: {\n      id: entry.id,\n      title: title.trim(),\n      summary: summary.trim(),\n      published: entry.published,\n      link: Array.isArray(entry.link) ? entry.link[0]?.['@_href'] : entry.link?.['@_href'] || entry.link || entry.id\n    }\n  };\n});"
-            },
-            "id": "code-process-id",
-            "name": "Process Results",
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [
-                850,
-                180
-            ]
-        },
-        {
-            "parameters": {
-                "mode": "runOnceForAllItems",
-                "jsCode": "const allPapers = [];\nlet runIndex = 0;\nwhile (true) {\n  try {\n    const items = $('Process Results').all(0, runIndex);\n    if (!items || items.length === 0) {\n      break;\n    }\n    allPapers.push(...items);\n    runIndex++;\n  } catch (error) {\n    break;\n  }\n}\nreturn allPapers;"
-            },
-            "id": "merge-papers-id",
-            "name": "Merge Papers",
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [
-                550,
-                420
-            ]
-        },
-        {
-            "parameters": {
-                "jsCode": "for (const item of $input.all()) {\n  const paperId = item.json.id;\n  try {\n    const response = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json'\n      },\n      body: JSON.stringify({\n        filter: {\n          should: [\n            {\n              key: \"metadata.url\",\n              match: {\n                value: paperId\n              }\n            },\n            {\n              key: \"url\",\n              match: {\n                value: paperId\n              }\n            }\n          ]\n        },\n        limit: 1\n      })\n    });\n    \n    if (response.ok) {\n      const data = await response.json();\n      const points = data.result?.points || [];\n      item.json.already_processed = points.length > 0;\n    } else {\n      item.json.already_processed = false;\n    }\n  } catch (error) {\n    item.json.already_processed = false;\n  }\n}\nreturn $input.all();"
-            },
-            "id": "qdrant-check-exists-id",
-            "name": "Check If Exists",
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [
-                700,
-                420
-            ]
-        },
-        {
-            "parameters": {
-                "conditions": {
-                    "options": {
-                        "caseSensitive": true,
-                        "leftValue": "",
-                        "typeValidation": "loose",
-                        "version": 2
-                    },
-                    "conditions": [
-                        {
-                            "id": "filter-condition-id",
-                            "leftValue": "={{ $json.already_processed }}",
-                            "rightValue": "true",
-                            "operator": {
-                                "type": "string",
-                                "operation": "notEquals"
-                            }
-                        }
-                    ],
-                    "combinator": "and"
-                },
-                "options": {}
-            },
-            "id": "filter-processed-id",
-            "name": "Filter Processed",
-            "type": "n8n-nodes-base.filter",
-            "typeVersion": 2.2,
-            "position": [
-                850,
-                420
-            ]
-        },
-        {
-            "parameters": {
-                "model": "gpt-4o",
-                "prompt": "You are a research assistant for an AI/ML monitoring pipeline called ResearchFlow. Your job is to help developers and researchers quickly assess new arXiv papers.
-
-Given the paper below, produce a structured summary with these sections:
-🔍 **What it does** (1–2 sentences on the core contribution)
-⚙️ **How it works** (1–2 sentences on the method or architecture)
-📌 **Why it matters** (1 sentence on practical or research significance)
-🏷️ **Relevance** (rate Low / Medium / High for someone working on LLMs, RAG systems, or AI automation pipelines)
-
-Title: {{ $json.title }}
-Category: {{ $json.category }}
-Abstract: {{ $json.summary }}
-Paper link: {{ $json.link }}
-
-Keep the summary concise and technical but accessible.",
-                "options": {}
-            },
-            "id": "llm-summarize-id",
-            "name": "OpenAI Summarize",
-            "type": "n8n-nodes-base.openAi",
-            "typeVersion": 1,
-            "position": [
-                1000,
-                420
-            ],
-            "credentials": {
-                "openAiApi": {
-                    "id": "openai-cred-id"
-                }
+  "name": "Arxiv Monitor & Process",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
             }
-        },
-        {
-            "parameters": {
-                "mode": "upsert",
-                "collection": "arxiv_papers",
-                "text": "={{ $json.summary }}",
-                "metadata": {
-                    "metadataValues": [
-                        {
-                            "name": "title",
-                            "value": "={{ $json.title }}"
-                        },
-                        {
-                            "name": "url",
-                            "value": "={{ $json.id }}"
-                        }
-                    ]
-                }
-            },
-            "id": "qdrant-store-id",
-            "name": "Qdrant Store",
-            "type": "n8n-nodes-base.qdrantVectorStore",
-            "typeVersion": 1,
-            "position": [
-                1150,
-                420
-            ],
-            "credentials": {
-                "qdrantApi": {
-                    "id": "qdrant-cred-id"
-                }
-            }
+          ]
         }
-    ],
-    "connections": {
-        "Schedule Trigger": {
-            "main": [
-                [
-                    {
-                        "node": "Define Categories",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Define Categories": {
-            "main": [
-                [
-                    {
-                        "node": "Loop Categories",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Loop Categories": {
-            "main": [
-                [
-                    {
-                        "node": "Wait",
-                        "type": "main",
-                        "index": 0
-                    }
-                ],
-                [
-                    {
-                        "node": "Merge Papers",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Wait": {
-            "main": [
-                [
-                    {
-                        "node": "Fetch Arxiv",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Fetch Arxiv": {
-            "main": [
-                [
-                    {
-                        "node": "Process Results",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Process Results": {
-            "main": [
-                [
-                    {
-                        "node": "Loop Categories",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Merge Papers": {
-            "main": [
-                [
-                    {
-                        "node": "Check If Exists",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Check If Exists": {
-            "main": [
-                [
-                    {
-                        "node": "Filter Processed",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Filter Processed": {
-            "main": [
-                [
-                    {
-                        "node": "OpenAI Summarize",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "OpenAI Summarize": {
-            "main": [
-                [
-                    {
-                        "node": "Qdrant Store",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        }
+      },
+      "id": "trigger-id",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        100,
+        300
+      ]
     },
-    "active": false,
-    "settings": {
-        "executionOrder": "v1",
-        "errorWorkflow": "error-handler-workflow-id"
+    {
+      "parameters": {
+        "jsCode": "return [\n  { json: { category: \"cs.AI\" } },\n  { json: { category: \"cs.LG\" } },\n  { json: { category: \"cs.CV\" } }\n];"
+      },
+      "id": "define-categories-id",
+      "name": "Define Categories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-categories-id",
+      "name": "Loop Categories",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "id": "wait-id",
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        550,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://export.arxiv.org/api/query",
+        "options": {},
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "search_query",
+              "value": "=cat:{{ $json.category }}"
+            },
+            {
+              "name": "sortBy",
+              "value": "submittedDate"
+            },
+            {
+              "name": "sortOrder",
+              "value": "descending"
+            },
+            {
+              "name": "max_results",
+              "value": "10"
+            }
+          ]
+        }
+      },
+      "id": "arxiv-fetch-id",
+      "name": "Fetch Arxiv",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        700,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const data = $input.item.json.body || $input.item.json;\nconst feed = data.feed;\nconst entries = feed?.entry || [];\nconst entryList = Array.isArray(entries) ? entries : (entries ? [entries] : []);\n\nreturn entryList.map(entry => {\n  const title = typeof entry.title === 'string' ? entry.title.replace(/\\n/g, ' ') : (entry.title?.['#text'] || '').replace(/\\n/g, ' ');\n  const summary = typeof entry.summary === 'string' ? entry.summary.replace(/\\n/g, ' ') : (entry.summary?.['#text'] || '').replace(/\\n/g, ' ');\n  return {\n    json: {\n      id: entry.id,\n      title: title.trim(),\n      summary: summary.trim(),\n      published: entry.published,\n      link: Array.isArray(entry.link) ? entry.link[0]?.['@_href'] : entry.link?.['@_href'] || entry.link || entry.id\n    }\n  };\n});"
+      },
+      "id": "code-process-id",
+      "name": "Process Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        850,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const allPapers = [];\nlet runIndex = 0;\nwhile (true) {\n  try {\n    const items = $('Process Results').all(0, runIndex);\n    if (!items || items.length === 0) {\n      break;\n    }\n    allPapers.push(...items);\n    runIndex++;\n  } catch (error) {\n    break;\n  }\n}\nreturn allPapers;"
+      },
+      "id": "merge-papers-id",
+      "name": "Merge Papers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        550,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) {\n  const paperId = item.json.id;\n  try {\n    const response = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json'\n      },\n      body: JSON.stringify({\n        filter: {\n          should: [\n            {\n              key: \"metadata.url\",\n              match: {\n                value: paperId\n              }\n            },\n            {\n              key: \"url\",\n              match: {\n                value: paperId\n              }\n            }\n          ]\n        },\n        limit: 1\n      })\n    });\n    \n    if (response.ok) {\n      const data = await response.json();\n      const points = data.result?.points || [];\n      item.json.already_processed = points.length > 0;\n    } else {\n      item.json.already_processed = false;\n    }\n  } catch (error) {\n    item.json.already_processed = false;\n  }\n}\nreturn $input.all();"
+      },
+      "id": "qdrant-check-exists-id",
+      "name": "Check If Exists",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "filter-condition-id",
+              "leftValue": "={{ $json.already_processed }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-processed-id",
+      "name": "Filter Processed",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        850,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "prompt": "You are a research assistant for an AI/ML monitoring pipeline called ResearchFlow. Your job is to help developers and researchers quickly assess new arXiv papers.\n\nGiven the paper below, produce a structured summary with these sections:\n🔍 **What it does** (1–2 sentences on the core contribution)\n⚙️ **How it works** (1–2 sentences on the method or architecture)\n📌 **Why it matters** (1 sentence on practical or research significance)\n🏷️ **Relevance** (rate Low / Medium / High for someone working on LLMs, RAG systems, or AI automation pipelines)\n🗂️ **Tags** (comma-separated, choose 1-3 from: LLMs, RAG, Computer Vision, NLP, Reinforcement Learning, Robotics, AI Safety/Ethics, Multimodal, Agents, Infrastructure/MLOps — or propose a close match if none fit)\n\nTitle: {{ $json.title }}\nCategory: {{ $json.category }}\nAbstract: {{ $json.summary }}\nPaper link: {{ $json.link }}\n\nKeep the summary concise and technical but accessible.",
+        "options": {}
+      },
+      "id": "llm-summarize-id",
+      "name": "OpenAI Summarize",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        420
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-cred-id"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "upsert",
+        "collection": "arxiv_papers",
+        "text": "={{ $json.summary }}",
+        "metadata": {
+          "metadataValues": [
+            {
+              "name": "title",
+              "value": "={{ $json.title }}"
+            },
+            {
+              "name": "url",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "tags",
+              "value": "={{ $json.tags }}"
+            }
+          ]
+        }
+      },
+      "id": "qdrant-store-id",
+      "name": "Qdrant Store",
+      "type": "n8n-nodes-base.qdrantVectorStore",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        420
+      ],
+      "credentials": {
+        "qdrantApi": {
+          "id": "qdrant-cred-id"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const text = $json.message?.content || $json.text || $json.choices?.[0]?.text || '';\nconst match = text.match(/Tags\\*\\*[^:]*:\\s*([^\\n]+)/i);\nconst tags = match\n  ? match[1].split(',').map(t => t.trim()).filter(Boolean)\n  : [];\n\nreturn {\n  json: {\n    ...$json,\n    tags,\n    tags_string: tags.join(', ')\n  }\n};"
+      },
+      "id": "extract-tags-id",
+      "name": "Extract Tags",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1150,
+        420
+      ]
     }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Define Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define Categories": {
+      "main": [
+        [
+          {
+            "node": "Loop Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Categories": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Papers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Fetch Arxiv",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Arxiv": {
+      "main": [
+        [
+          {
+            "node": "Process Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Results": {
+      "main": [
+        [
+          {
+            "node": "Loop Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Papers": {
+      "main": [
+        [
+          {
+            "node": "Check If Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Exists": {
+      "main": [
+        [
+          {
+            "node": "Filter Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Processed": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Summarize": {
+      "main": [
+        [
+          {
+            "node": "Extract Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Tags": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "error-handler-workflow-id"
+  }
 }
