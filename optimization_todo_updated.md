@@ -9,7 +9,7 @@ Once the basic flow is running successfully, here are several ways to optimize a
 
 ## 🧠 AI & Content Quality
 - [x] **Custom Prompt Tuning**: Refine the OpenAI prompt to properly cover the project details and implementation 
-- [ ] **Automatic Tagging**: Use the LLM to categorize papers into sub-topics (e.g., "LLMs", "Computer Vision", "Ethics").
+- [x] **Automatic Tagging**: Use the LLM to categorize papers into sub-topics (e.g., "LLMs", "Computer Vision", "Ethics").
 - [ ] **Image Generation**: Use DALL-E 3 within the workflow to generate a relevant thumbnail image for every paper summary.
 
 ## 🛠 Features & UX
