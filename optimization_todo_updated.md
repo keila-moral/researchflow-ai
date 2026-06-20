@@ -8,8 +8,8 @@ Once the basic flow is running successfully, here are several ways to optimize a
 - [x] **Rate Limiting**: arXiv API has a strict 3-second delay policy. Ensure the workflow doesn't hammer the API if fetching multiple categories.
 
 ## 🧠 AI & Content Quality
-- [ ] **Custom Prompt Tuning**: Refine the OpenAI prompt to properly cover the project details and implementation 
-- [ ] **Automatic Tagging**: Use the LLM to categorize papers into sub-topics (e.g., "LLMs", "Computer Vision", "Ethics") to make the LinkedIn posts more structured.
+- [x] **Custom Prompt Tuning**: Refine the OpenAI prompt to properly cover the project details and implementation 
+- [ ] **Automatic Tagging**: Use the LLM to categorize papers into sub-topics (e.g., "LLMs", "Computer Vision", "Ethics").
 - [ ] **Image Generation**: Use DALL-E 3 within the workflow to generate a relevant thumbnail image for every paper summary.
 
 ## 🛠 Features & UX
