@@ -239,6 +239,60 @@
         1150,
         420
       ]
+    },
+    {
+      "id": "dalle-thumbnail-id",
+      "name": "Generate Thumbnail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1300, 420],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai-cred-id"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/images/generations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "dall-e-3"
+            },
+            {
+              "name": "prompt",
+              "value": "=Create a clean, modern, abstract scientific illustration suitable as a thumbnail for a research paper titled: \"{{ $json.title }}\". The image should visually represent the key concepts without any text. Use a professional color palette with blues and teals. Style: flat design, minimalist."
+            },
+            {
+              "name": "n",
+              "value": "1"
+            },
+            {
+              "name": "size",
+              "value": "1024x1024"
+            },
+            {
+              "name": "quality",
+              "value": "standard"
+            },
+            {
+              "name": "response_format",
+              "value": "url"
+            }
+          ]
+        },
+        "options": {}
+      }
     }
   ],
   "connections": {
