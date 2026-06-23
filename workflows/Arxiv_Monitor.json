@@ -293,6 +293,17 @@
         },
         "options": {}
       }
+    },
+    {
+      "id": "extract-image-url-id",
+      "name": "Extract Image URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 420],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const imageUrl = $json.data?.[0]?.url || '';\nreturn {\n  json: {\n    ...$json,\n    thumbnail_url: imageUrl\n  }\n};"
+      }
     }
   ],
   "connections": {
