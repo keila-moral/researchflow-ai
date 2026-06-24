@@ -208,6 +208,10 @@
             {
               "name": "tags",
               "value": "={{ $json.tags }}"
+            },
+            {
+              "name": "thumbnail_url",
+              "value": "={{ $json.thumbnail_url }}"
             }
           ]
         }
