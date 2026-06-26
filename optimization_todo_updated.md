@@ -10,7 +10,7 @@ Once the basic flow is running successfully, here are several ways to optimize a
 ## 🧠 AI & Content Quality
 - [x] **Custom Prompt Tuning**: Refine the OpenAI prompt to properly cover the project details and implementation 
 - [x] **Automatic Tagging**: Use the LLM to categorize papers into sub-topics (e.g., "LLMs", "Computer Vision", "Ethics").
-- [ ] **Image Generation**: Use DALL-E 3 within the workflow to generate a relevant thumbnail image for every paper summary.
+- [x] **Image Generation**: Use DALL-E 3 within the workflow to generate a relevant thumbnail image for every paper summary.
 
 ## 🛠 Features & UX
 - [ ] **LinkedIn Integration**: Use the n8n node to automatically produce a summary as a draft, a live post or  just sending it to Telegram / Discord.
