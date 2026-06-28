@@ -173,7 +173,7 @@
     {
       "parameters": {
         "model": "gpt-4o",
-        "prompt": "You are a research assistant for an AI/ML monitoring pipeline called ResearchFlow. Your job is to help developers and researchers quickly assess new arXiv papers.\n\nGiven the paper below, produce a structured summary with these sections:\n🔍 **What it does** (1–2 sentences on the core contribution)\n⚙️ **How it works** (1–2 sentences on the method or architecture)\n📌 **Why it matters** (1 sentence on practical or research significance)\n🏷️ **Relevance** (rate Low / Medium / High for someone working on LLMs, RAG systems, or AI automation pipelines)\n🗂️ **Tags** (comma-separated, choose 1-3 from: LLMs, RAG, Computer Vision, NLP, Reinforcement Learning, Robotics, AI Safety/Ethics, Multimodal, Agents, Infrastructure/MLOps — or propose a close match if none fit)\n\nTitle: {{ $json.title }}\nCategory: {{ $json.category }}\nAbstract: {{ $json.summary }}\nPaper link: {{ $json.link }}\n\nKeep the summary concise and technical but accessible.",
+        "prompt": "You are a research assistant for an AI/ML monitoring pipeline called ResearchFlow. Your job is to help developers and researchers quickly assess new arXiv papers.\n\nGiven the paper below, produce a structured summary with these sections:\n\ud83d\udd0d **What it does** (1\u20132 sentences on the core contribution)\n\u2699\ufe0f **How it works** (1\u20132 sentences on the method or architecture)\n\ud83d\udccc **Why it matters** (1 sentence on practical or research significance)\n\ud83c\udff7\ufe0f **Relevance** (rate Low / Medium / High for someone working on LLMs, RAG systems, or AI automation pipelines)\n\ud83d\uddc2\ufe0f **Tags** (comma-separated, choose 1-3 from: LLMs, RAG, Computer Vision, NLP, Reinforcement Learning, Robotics, AI Safety/Ethics, Multimodal, Agents, Infrastructure/MLOps \u2014 or propose a close match if none fit)\n\nTitle: {{ $json.title }}\nCategory: {{ $json.category }}\nAbstract: {{ $json.summary }}\nPaper link: {{ $json.link }}\n\nKeep the summary concise and technical but accessible.",
         "options": {}
       },
       "id": "llm-summarize-id",
@@ -249,7 +249,10 @@
       "name": "Generate Thumbnail",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1300, 420],
+      "position": [
+        1300,
+        420
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "openai-cred-id"
@@ -263,7 +266,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -303,10 +309,36 @@
       "name": "Extract Image URL",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1450, 420],
+      "position": [
+        1450,
+        420
+      ],
       "parameters": {
         "mode": "runOnceForEachItem",
         "jsCode": "const imageUrl = $json.data?.[0]?.url || '';\nreturn {\n  json: {\n    ...$json,\n    thumbnail_url: imageUrl\n  }\n};"
+      }
+    },
+    {
+      "id": "send-telegram-notification",
+      "name": "Send Telegram Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        420
+      ],
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=\ud83d\udcc4 *{{ $json.title }}*\n\n{{ $json.message.content }}\n\n\ud83c\udff7\ufe0f *Tags:* {{ $json.tags_string }}\n\ud83d\uddbc\ufe0f {{ $json.thumbnail_url }}\n\ud83d\udd17 {{ $json.link }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-credentials",
+          "name": "Telegram account"
+        }
       }
     }
   ],
@@ -455,6 +487,17 @@
         [
           {
             "node": "Qdrant Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Store": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Notification",
             "type": "main",
             "index": 0
           }
