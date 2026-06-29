@@ -340,6 +340,45 @@
           "name": "Telegram account"
         }
       }
+    },
+    {
+      "id": "send-discord-notification",
+      "name": "Send Discord Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2050,
+        560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "embeds": [
+            {
+              "title": "={{ $json.title }}",
+              "description": "={{ $json.message.content }}",
+              "url": "={{ $json.link }}",
+              "color": 5814783,
+              "fields": [
+                {
+                  "name": "\ud83c\udff7\ufe0f Tags",
+                  "value": "={{ $json.tags_string }}",
+                  "inline": true
+                }
+              ],
+              "image": {
+                "url": "={{ $json.thumbnail_url }}"
+              },
+              "footer": {
+                "text": "ResearchFlow AI \u2022 arXiv"
+              }
+            }
+          ]
+        }
+      }
     }
   ],
   "connections": {
@@ -498,6 +537,11 @@
         [
           {
             "node": "Send Telegram Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Discord Notification",
             "type": "main",
             "index": 0
           }
