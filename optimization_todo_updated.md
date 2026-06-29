@@ -13,7 +13,7 @@ Once the basic flow is running successfully, here are several ways to optimize a
 - [x] **Image Generation**: Use DALL-E 3 within the workflow to generate a relevant thumbnail image for every paper summary.
 
 ## 🛠 Features & UX
-- [ ] **Summary Integration**: Use the n8n node to automatically produce a summary as a draft, a live post or  just sending it to Telegram / Discord.
+- [x] **Summary Integration**: Use the n8n node to automatically produce a summary as a draft, a live post or  just sending it to Telegram / Discord.
 - [ ] **Category Expansion**: Add more categories (e.g., `cs.LG`, `cs.CV`) and allow the Semantic Search agent to filter by category.
 - [ ] **PDF Parsing**: Instead of just using the abstract, add a step to download the PDF and use a "Document Loader" in n8n to summarize the *entire* paper.
 
