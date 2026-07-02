@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "return [\n  { json: { category: \"cs.AI\" } },\n  { json: { category: \"cs.LG\" } },\n  { json: { category: \"cs.CV\" } }\n];"
+        "jsCode": "return [\n  { json: { category: \"cs.AI\" } },\n  { json: { category: \"cs.LG\" } },\n  { json: { category: \"cs.CV\" } },\n  { json: { category: \"cs.CL\" } },\n  { json: { category: \"cs.RO\" } },\n  { json: { category: \"stat.ML\" } }\n];"
       },
       "id": "define-categories-id",
       "name": "Define Categories",
