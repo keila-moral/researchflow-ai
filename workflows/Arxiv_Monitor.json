@@ -212,6 +212,10 @@
             {
               "name": "thumbnail_url",
               "value": "={{ $json.thumbnail_url }}"
+            },
+            {
+              "name": "category",
+              "value": "={{ $json.category }}"
             }
           ]
         }
