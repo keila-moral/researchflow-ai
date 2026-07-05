@@ -50,7 +50,10 @@
         },
         {
             "parameters": {
-                "collection": "arxiv_papers"
+                "collection": "arxiv_papers",
+                "options": {
+                    "searchFilterJson": "={{ $fromAI(\"qdrantFilter\", \"A Qdrant filter object, e.g. {\\\"must\\\":[{\\\"key\\\":\\\"category\\\",\\\"match\\\":{\\\"value\\\":\\\"cs.LG\\\"}}]}. Build this only if the user specifies a category like cs.LG or cs.CV; otherwise omit filtering entirely.\") }}"
+                }
             },
             "id": "qdrant-id",
             "name": "Qdrant Retriever",
