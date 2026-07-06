@@ -18,7 +18,9 @@
         },
         {
             "parameters": {
-                "options": {}
+                "options": {
+                    "systemMessage": "You help users search summarized arXiv papers. If the user mentions a specific category (e.g. cs.LG, cs.CV, cs.AI, cs.CL, cs.RO), build a Qdrant filter on the 'category' metadata field before querying the retriever tool. If no category is mentioned, search across all categories."
+                }
             },
             "id": "agent-id",
             "name": "AI Agent",
