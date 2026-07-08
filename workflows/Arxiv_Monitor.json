@@ -492,6 +492,17 @@
         ]
       ]
     },
+    "Filter Processed": {
+      "main": [
+        [
+          {
+            "node": "Get PDF URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "OpenAI Summarize": {
       "main": [
         [
