@@ -1,0 +1,16 @@
+# Secrets / local config
+.env
+
+# n8n & Qdrant local data (if ever run outside Docker volumes)
+n8n_data/
+qdrant_data/
+
+# Traefik ACME storage (contains cert private keys)
+traefik_data/
+letsencrypt/
+acme.json
+
+# OS / editor cruft
+.DS_Store
+*.log
+__pycache__/
