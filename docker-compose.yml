@@ -26,6 +26,10 @@ services:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
     # no ports published — reachable internally at http://qdrant:6333
+    labels:
+      # tells docker-volume-backup to stop this container for the
+      # duration of the snapshot, so Qdrant's storage isn't mid-write
+      - "docker-volume-backup.stop-during-backup=true"
 
   n8n:
     image: n8nio/n8n:latest
@@ -48,8 +52,34 @@ services:
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=le"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+      - "docker-volume-backup.stop-during-backup=true"
+
+  backup:
+    image: offen/docker-volume-backup:v2
+    container_name: backup
+    environment:
+      # cron schedule for backups — default here is daily at 3am
+      - BACKUP_CRON=${BACKUP_CRON:-0 3 * * *}
+      - BACKUP_FILENAME=researchflow-backup-%Y-%m-%dT%H-%M-%S.tar.gz
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
+      - BACKUP_PRUNING_LEEWAY=5m
+      # only stop/back up containers carrying the label above
+      - BACKUP_STOP_DURING_BACKUP_LABEL=true
+      # --- optional offsite storage (S3 / R2 / MinIO / etc) ---
+      # leave these unset in .env to keep backups local-only
+      - AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-}
+    volumes:
+      - qdrant_data:/backup/qdrant_data:ro
+      - n8n_data:/backup/n8n_data:ro
+      - backup_data:/archive
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
 
 volumes:
   n8n_data:
   qdrant_data:
   traefik_data:
+  backup_data:
