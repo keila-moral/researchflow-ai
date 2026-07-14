@@ -18,5 +18,5 @@ Once the basic flow is running successfully, here are several ways to optimize a
 - [x] **PDF Parsing**: Instead of just using the abstract, add a step to download the PDF and use a "Document Loader" in n8n to summarize the *entire* paper.
 
 ## 🏗 Infrastructure
-- [ ] **Security**: Secure the n8n instance with a domain and SSL (using a reverse proxy like Nginx or Traefik) if you plan to access it outside localhost.
+- [x] **Security**: Secure the n8n instance with a domain and SSL (using a reverse proxy like Nginx or Traefik) if you plan to access it outside localhost.
 - [ ] **Backups**: Implement an automated backup for the `qdrant_data` and `n8n_data` volumes.
