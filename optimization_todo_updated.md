@@ -19,4 +19,4 @@ Once the basic flow is running successfully, here are several ways to optimize a
 
 ## 🏗 Infrastructure
 - [x] **Security**: Secure the n8n instance with a domain and SSL (using a reverse proxy like Nginx or Traefik) if you plan to access it outside localhost.
-- [ ] **Backups**: Implement an automated backup for the `qdrant_data` and `n8n_data` volumes.
+- [x] **Backups**: Implement an automated backup for the `qdrant_data` and `n8n_data` volumes.
