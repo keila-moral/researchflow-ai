@@ -270,8 +270,10 @@
     {
       "parameters": {
         "model": "gpt-4o",
-        "prompt": "You are a research assistant for an AI/ML monitoring pipeline called ResearchFlow. Your job is to help developers and researchers quickly assess new arXiv papers.\n\nGiven the full-paper summary below, produce a structured summary with these sections:\n\ud83d\udd0d **What it does** (1\u20132 sentences on the core contribution)\n\u2699\ufe0f **How it works** (1\u20132 sentences on the method or architecture)\n\ud83d\udccc **Why it matters** (1 sentence on practical or research significance)\n\ud83c\udff7\ufe0f **Relevance** (rate Low / Medium / High for someone working on LLMs, RAG systems, or AI automation pipelines)\n\ud83d\uddc2\ufe0f **Tags** (comma-separated, choose 1-3 from: LLMs, RAG, Computer Vision, NLP, Reinforcement Learning, Robotics, AI Safety/Ethics, Multimodal, Agents, Infrastructure/MLOps \u2014 or propose a close match if none fit)\n\nTitle: {{ $json.title }}\nCategory: {{ $json.category }}\nFull paper summary: {{ $json.response.text }}\nPaper link: {{ $json.link }}\n\nKeep the summary concise and technical but accessible.",
-        "options": {}
+        "prompt": "You are a research assistant for an AI/ML monitoring pipeline called ResearchFlow. Your job is to help developers and researchers quickly assess new arXiv papers.\n\nGiven the full-paper summary below, respond with a JSON object and NOTHING ELSE — no markdown fences, no prose outside the object.\n\nRequired schema:\n{\n  \"what_it_does\": \"1-2 sentences on the core contribution\",\n  \"how_it_works\": \"1-2 sentences on the method or architecture\",\n  \"why_it_matters\": \"1 sentence on practical or research significance\",\n  \"relevance\": \"Low | Medium | High — for someone working on LLMs, RAG systems, or AI automation pipelines\",\n  \"tags\": [\"tag1\", \"tag2\"],\n  \"telegram_summary\": \"A single Markdown-formatted message combining all sections above, using the same emoji headings as before: 🔍 What it does, ⚙️ How it works, 📌 Why it matters, 🏷️ Relevance, 🗂️ Tags\"\n}\n\ntags must be an array of 1-3 strings chosen from: LLMs, RAG, Computer Vision, NLP, Reinforcement Learning, Robotics, AI Safety/Ethics, Multimodal, Agents, Infrastructure/MLOps — or a close match if none fit.\n\nTitle: {{ $json.title }}\nCategory: {{ $json.category }}\nFull paper summary: {{ $json.response.text }}\nPaper link: {{ $json.link }}\n\nReturn only the JSON object.",
+        "options": {
+          "responseFormat": "json_object"
+        }
       },
       "id": "llm-summarize-id",
       "name": "OpenAI Summarize",
@@ -291,7 +293,7 @@
       "parameters": {
         "mode": "upsert",
         "collection": "arxiv_papers",
-        "text": "={{ $json.message.content }}",
+        "text": "={{ $json.parsed.telegram_summary }}",
         "metadata": {
           "metadataValues": [
             {
@@ -307,6 +309,10 @@
               "value": "={{ $json.tags }}"
             },
             {
+              "name": "relevance",
+              "value": "={{ $json.relevance }}"
+            },
+            {
               "name": "thumbnail_url",
               "value": "={{ $json.thumbnail_url }}"
             },
@@ -317,6 +323,18 @@
             {
               "name": "abstract",
               "value": "={{ $('Get PDF URL').item.json.summary }}"
+            },
+            {
+              "name": "what_it_does",
+              "value": "={{ $json.parsed.what_it_does }}"
+            },
+            {
+              "name": "how_it_works",
+              "value": "={{ $json.parsed.how_it_works }}"
+            },
+            {
+              "name": "why_it_matters",
+              "value": "={{ $json.parsed.why_it_matters }}"
             }
           ]
         }
@@ -338,7 +356,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const text = $json.message?.content || $json.text || $json.choices?.[0]?.text || '';\nconst match = text.match(/Tags\\*\\*[^:]*:\\s*([^\\n]+)/i);\nconst tags = match\n  ? match[1].split(',').map(t => t.trim()).filter(Boolean)\n  : [];\n\nreturn {\n  json: {\n    ...$json,\n    tags,\n    tags_string: tags.join(', ')\n  }\n};"
+        "jsCode": "const raw = $json.message?.content || $json.text || '';\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  // Fallback: surface the parse error clearly so it shows in execution logs\n  throw new Error(`OpenAI Summarize returned non-JSON: ${raw.slice(0, 200)}`);\n}\n\nconst tags = Array.isArray(parsed.tags) ? parsed.tags : [];\n\nreturn {\n  json: {\n    ...$json,\n    parsed,\n    tags,\n    tags_string: tags.join(', '),\n    relevance: parsed.relevance || 'Unknown',\n  }\n};\n"
       },
       "id": "extract-tags-id",
       "name": "Extract Tags",
@@ -434,7 +452,7 @@
       ],
       "parameters": {
         "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
-        "text": "=\ud83d\udcc4 *{{ $json.title }}*\n\n{{ $json.message.content }}\n\n\ud83c\udff7\ufe0f *Tags:* {{ $json.tags_string }}\n\ud83d\uddbc\ufe0f {{ $json.thumbnail_url }}\n\ud83d\udd17 {{ $json.link }}",
+        "text": "=📄 *{{ $json.title }}*\n\n{{ $json.parsed.telegram_summary }}\n\n📊 *Relevance:* {{ $json.relevance }}\n🏷️ *Tags:* {{ $json.tags_string }}\n🖼️ {{ $json.thumbnail_url }}\n🔗 {{ $json.link }}",
         "additionalFields": {
           "parse_mode": "Markdown"
         }
@@ -464,13 +482,18 @@
           "embeds": [
             {
               "title": "={{ $json.title }}",
-              "description": "={{ $json.message.content }}",
+              "description": "={{ $json.parsed.telegram_summary }}",
               "url": "={{ $json.link }}",
               "color": 5814783,
               "fields": [
                 {
-                  "name": "\ud83c\udff7\ufe0f Tags",
+                  "name": "🏷️ Tags",
                   "value": "={{ $json.tags_string }}",
+                  "inline": true
+                },
+                {
+                  "name": "📊 Relevance",
+                  "value": "={{ $json.relevance }}",
                   "inline": true
                 }
               ],
@@ -478,7 +501,7 @@
                 "url": "={{ $json.thumbnail_url }}"
               },
               "footer": {
-                "text": "ResearchFlow AI \u2022 arXiv"
+                "text": "ResearchFlow AI • arXiv"
               }
             }
           ]
