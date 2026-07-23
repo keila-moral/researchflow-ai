@@ -335,6 +335,10 @@
             {
               "name": "why_it_matters",
               "value": "={{ $json.parsed.why_it_matters }}"
+            },
+            {
+              "name": "used_fallback",
+              "value": "={{ $json.used_fallback === true ? 'true' : 'false' }}"
             }
           ]
         }
@@ -356,7 +360,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const raw = $json.message?.content || $json.text || '';\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  // Fallback: surface the parse error clearly so it shows in execution logs\n  throw new Error(`OpenAI Summarize returned non-JSON: ${raw.slice(0, 200)}`);\n}\n\nconst tags = Array.isArray(parsed.tags) ? parsed.tags : [];\n\nreturn {\n  json: {\n    ...$json,\n    parsed,\n    tags,\n    tags_string: tags.join(', '),\n    relevance: parsed.relevance || 'Unknown',\n  }\n};\n"
+        "jsCode": "const raw = $json.message?.content || $json.text || '';\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error(`OpenAI Summarize returned non-JSON: ${raw.slice(0, 200)}`);\n}\n\nconst tags = Array.isArray(parsed.tags) ? parsed.tags : [];\n\n// Prepend fallback warning to telegram_summary when PDF was unavailable\nif ($json.used_fallback && parsed.telegram_summary) {\n  parsed.telegram_summary =\n    '⚠️ _PDF unavailable — summary generated from abstract only_\\n\\n' +\n    parsed.telegram_summary;\n}\n\nreturn {\n  json: {\n    ...$json,\n    parsed,\n    tags,\n    tags_string: tags.join(', '),\n    relevance: parsed.relevance || 'Unknown',\n  }\n};\n"
       },
       "id": "extract-tags-id",
       "name": "Extract Tags",
@@ -506,6 +510,20 @@
             }
           ]
         }
+      }
+    },
+    {
+      "id": "pdf-fallback-id",
+      "name": "PDF Fallback (Abstract Only)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        620
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Reached when Download PDF or Summarization Chain fails.\n// We reconstruct the shape that OpenAI Summarize expects:\n// { ...paperFields, response: { text: <abstract> }, used_fallback: true }\n//\n// $json here is the error object passed by n8n on the error branch;\n// the original paper item is accessible via the error context.\n// n8n error branches carry the triggering item's json in $json.\n\nconst abstract = $json.summary || $json.abstract || 'Abstract not available.';\n\nreturn {\n  json: {\n    ...$json,\n    response: {\n      text: abstract\n    },\n    used_fallback: true,\n    fallback_reason: 'PDF download or summarisation chain failed — using abstract only'\n  }\n};\n"
       }
     }
   ],
@@ -695,6 +713,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "PDF Fallback (Abstract Only)",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -703,6 +728,13 @@
         [
           {
             "node": "OpenAI Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PDF Fallback (Abstract Only)",
             "type": "main",
             "index": 0
           }
@@ -737,6 +769,17 @@
           {
             "node": "Summarization Chain",
             "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF Fallback (Abstract Only)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Summarize",
+            "type": "main",
             "index": 0
           }
         ]
