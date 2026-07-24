@@ -339,6 +339,10 @@
             {
               "name": "used_fallback",
               "value": "={{ $json.used_fallback === true ? 'true' : 'false' }}"
+            },
+            {
+              "name": "thumbnail_filename",
+              "value": "={{ $json.thumbnail_filename || '' }}"
             }
           ]
         }
@@ -525,6 +529,20 @@
         "mode": "runOnceForEachItem",
         "jsCode": "// Reached when Download PDF or Summarization Chain fails.\n// We reconstruct the shape that OpenAI Summarize expects:\n// { ...paperFields, response: { text: <abstract> }, used_fallback: true }\n//\n// $json here is the error object passed by n8n on the error branch;\n// the original paper item is accessible via the error context.\n// n8n error branches carry the triggering item's json in $json.\n\nconst abstract = $json.summary || $json.abstract || 'Abstract not available.';\n\nreturn {\n  json: {\n    ...$json,\n    response: {\n      text: abstract\n    },\n    used_fallback: true,\n    fallback_reason: 'PDF download or summarisation chain failed — using abstract only'\n  }\n};\n"
       }
+    },
+    {
+      "id": "persist-thumbnail-id",
+      "name": "Persist Thumbnail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const https = require('https');\nconst http = require('http');\nconst fs = require('fs');\nconst path = require('path');\n\nconst signedUrl = $json.thumbnail_url;\n\n// If no thumbnail was generated (e.g. DALL-E was skipped), pass through\nif (!signedUrl) {\n  return { json: { ...$json, thumbnail_url: '' } };\n}\n\n// Derive a stable filename from the arXiv paper ID\n// $json.id looks like 'https://arxiv.org/abs/2401.12345'\nconst paperId = ($json.id || '').split('/').pop().replace(/[^a-zA-Z0-9._-]/g, '_');\nconst filename = `${paperId}.png`;\nconst dir = '/home/node/.n8n/static/thumbnails';\nconst filepath = path.join(dir, filename);\n\n// Ensure directory exists\nif (!fs.existsSync(dir)) {\n  fs.mkdirSync(dir, { recursive: true });\n}\n\n// Download the image\nawait new Promise((resolve, reject) => {\n  const protocol = signedUrl.startsWith('https') ? https : http;\n  const file = fs.createWriteStream(filepath);\n  protocol.get(signedUrl, (res) => {\n    // Follow a single redirect (DALL-E CDN sometimes redirects)\n    if (res.statusCode === 301 || res.statusCode === 302) {\n      const redirectProto = res.headers.location.startsWith('https') ? https : http;\n      redirectProto.get(res.headers.location, (res2) => {\n        res2.pipe(file);\n        file.on('finish', () => { file.close(); resolve(); });\n      }).on('error', reject);\n    } else {\n      res.pipe(file);\n      file.on('finish', () => { file.close(); resolve(); });\n    }\n  }).on('error', (err) => {\n    fs.unlink(filepath, () => {});\n    reject(err);\n  });\n});\n\n// Build the permanent public URL\n// n8n serves /home/node/.n8n/static/* at https://<host>/static/*\nconst domain = $vars.N8N_DOMAIN || 'localhost:5678';\nconst permanentUrl = `https://${domain}/static/thumbnails/${filename}`;\n\nreturn {\n  json: {\n    ...$json,\n    thumbnail_url: permanentUrl,\n    thumbnail_filename: filename,\n  }\n};\n"
+      }
     }
   ],
   "connections": {
@@ -671,7 +689,7 @@
       "main": [
         [
           {
-            "node": "Qdrant Store",
+            "node": "Persist Thumbnail",
             "type": "main",
             "index": 0
           }
@@ -779,6 +797,17 @@
         [
           {
             "node": "OpenAI Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Thumbnail": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Store",
             "type": "main",
             "index": 0
           }
