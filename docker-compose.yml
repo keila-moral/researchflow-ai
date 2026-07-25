@@ -20,19 +20,20 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.3
     container_name: qdrant
+    environment:
+      # API key authentication — set QDRANT_API_KEY in your .env
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
     # no ports published — reachable internally at http://qdrant:6333
     labels:
-      # tells docker-volume-backup to stop this container for the
-      # duration of the snapshot, so Qdrant's storage isn't mid-write
       - "docker-volume-backup.stop-during-backup=true"
 
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:1.48.3
     container_name: n8n
     environment:
       - N8N_HOST=${N8N_DOMAIN}
@@ -41,8 +42,23 @@ services:
       - NODE_ENV=production
       - WEBHOOK_URL=https://${N8N_DOMAIN}/
       - N8N_EDITOR_BASE_URL=https://${N8N_DOMAIN}/
+      # Exposes /home/node/.n8n/static/* at https://<N8N_DOMAIN>/static/*
+      # Used by the Persist Thumbnail node to serve permanent image URLs
+      - N8N_PUBLIC_API_BASE_URL=https://${N8N_DOMAIN}/
+      # Make the domain available as an n8n variable so workflow nodes
+      # can reference it via $vars.N8N_DOMAIN without hardcoding
+      - N8N_VARIABLES_N8N_DOMAIN=${N8N_DOMAIN}
+      # Pass remaining vars so workflows can reference them via $vars.*
+      - N8N_VARIABLES_TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - N8N_VARIABLES_DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - N8N_VARIABLES_ALERT_FROM_EMAIL=${ALERT_FROM_EMAIL}
+      - N8N_VARIABLES_ALERT_TO_EMAIL=${ALERT_TO_EMAIL}
     volumes:
       - n8n_data:/home/node/.n8n
+      # Dedicated thumbnails volume mounted at the static path n8n serves.
+      # Separating it from n8n_data means thumbnails survive n8n data resets
+      # and can be backed up independently.
+      - thumbnails_data:/home/node/.n8n/static/thumbnails
     restart: unless-stopped
     depends_on:
       - qdrant
@@ -58,12 +74,10 @@ services:
     image: offen/docker-volume-backup:v2
     container_name: backup
     environment:
-      # cron schedule for backups — default here is daily at 3am
       - BACKUP_CRON=${BACKUP_CRON:-0 3 * * *}
       - BACKUP_FILENAME=researchflow-backup-%Y-%m-%dT%H-%M-%S.tar.gz
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
       - BACKUP_PRUNING_LEEWAY=5m
-      # only stop/back up containers carrying the label above
       - BACKUP_STOP_DURING_BACKUP_LABEL=true
       # --- optional offsite storage (S3 / R2 / MinIO / etc) ---
       # leave these unset in .env to keep backups local-only
@@ -74,6 +88,7 @@ services:
     volumes:
       - qdrant_data:/backup/qdrant_data:ro
       - n8n_data:/backup/n8n_data:ro
+      - thumbnails_data:/backup/thumbnails_data:ro
       - backup_data:/archive
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
@@ -83,3 +98,5 @@ volumes:
   qdrant_data:
   traefik_data:
   backup_data:
+  # Persistent storage for DALL-E thumbnails served via n8n's static file server
+  thumbnails_data:
