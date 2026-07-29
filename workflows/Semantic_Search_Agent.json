@@ -1,0 +1,319 @@
+{
+  "name": "Semantic Search Agent",
+  "nodes": [
+    {
+      "id": "webhook-trigger-id",
+      "name": "Search Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ],
+      "webhookId": "semantic-search-webhook",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "search",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "validate-input-id",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const body = $json.body || $json;\nconst query = (body.query || '').trim();\nconst topK  = Math.min(Math.max(parseInt(body.top_k) || 5, 1), 20);\nconst tagFilter = body.tag_filter || null;\n\nif (!query) {\n  throw new Error('Missing required field: query');\n}\n\nreturn {\n  json: { query, top_k: topK, tag_filter: tagFilter }\n};\n"
+      }
+    },
+    {
+      "id": "embed-query-id",
+      "name": "Embed Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.OPENAI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "text-embedding-3-small",
+          "input": "={{ $json.query }}"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-embedding-id",
+      "name": "Merge Embedding",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Items: [0] = validate output, [1] = embed output\n// After chained nodes, $input.all() has the embedding result;\n// we reach back to Validate Input for the original params.\nconst embedding = $json.data?.[0]?.embedding;\nif (!embedding) throw new Error('Embedding API returned no vector');\n\nconst query     = $('Validate Input').first().json.query;\nconst topK      = $('Validate Input').first().json.top_k;\nconst tagFilter = $('Validate Input').first().json.tag_filter;\n\nreturn [{ json: { query, top_k: topK, tag_filter: tagFilter, embedding } }];\n"
+      }
+    },
+    {
+      "id": "qdrant-search-id",
+      "name": "Qdrant Vector Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { embedding, top_k, tag_filter } = $json;\n\n// Build optional tag filter\nconst filter = tag_filter ? {\n  must: [{\n    key: 'metadata.tags',\n    match: { value: tag_filter }\n  }]\n} : undefined;\n\nconst body = {\n  vector: embedding,\n  limit: top_k,\n  with_payload: true,\n  score_threshold: 0.35,\n  ...(filter ? { filter } : {})\n};\n\nconst response = await fetch('http://qdrant:6333/collections/arxiv_papers/points/search', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify(body)\n});\n\nif (!response.ok) {\n  const err = await response.text();\n  throw new Error(`Qdrant search failed: ${response.status} ${err}`);\n}\n\nconst data = await response.json();\nconst results = (data.result || []).map(point => ({\n  score:         point.score,\n  title:         point.payload?.metadata?.title         || point.payload?.title         || 'Untitled',\n  url:           point.payload?.metadata?.url           || point.payload?.url           || '',\n  tags:          point.payload?.metadata?.tags          || point.payload?.tags          || [],\n  relevance:     point.payload?.metadata?.relevance     || point.payload?.relevance     || '',\n  what_it_does:  point.payload?.metadata?.what_it_does  || point.payload?.what_it_does  || '',\n  how_it_works:  point.payload?.metadata?.how_it_works  || point.payload?.how_it_works  || '',\n  why_it_matters:point.payload?.metadata?.why_it_matters|| point.payload?.why_it_matters|| '',\n  thumbnail_url: point.payload?.metadata?.thumbnail_url || point.payload?.thumbnail_url || '',\n  summary:       point.payload?.document || ''\n}));\n\nreturn [{ json: { ...$json, results } }];\n"
+      }
+    },
+    {
+      "id": "gpt-answer-id",
+      "name": "GPT-4o Answer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.OPENAI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "gpt-4o",
+          "response_format": {
+            "type": "json_object"
+          },
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ResearchFlow, an AI research assistant. Answer the user's question using ONLY the papers provided below. Cite every claim with the paper title in square brackets, e.g. [Paper Title]. If none of the papers are relevant to the question, say so clearly. Be concise and precise — this is for technical readers.\n\nRespond with a JSON object and nothing else:\n{\n  \"answer\": \"Your answer with inline [Paper Title] citations\",\n  \"sources\": [\n    {\n      \"title\": \"Paper title\",\n      \"url\": \"arXiv link\",\n      \"relevance_to_query\": \"One sentence on why this paper is relevant\"\n    }\n  ],\n  \"confidence\": \"High | Medium | Low — how well the retrieved papers answer the question\"\n}"
+            },
+            {
+              "role": "user",
+              "content": "=Question: {{ $json.query }}\n\nPapers:\n{{ $json.results.map((r, i) => `[${i+1}] ${r.title}\\nWhat it does: ${r.what_it_does}\\nHow it works: ${r.how_it_works}\\nWhy it matters: ${r.why_it_matters}\\nLink: ${r.url}`).join('\\n\\n') }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "format-response-id",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.choices?.[0]?.message?.content || '{}';\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error(`GPT-4o returned non-JSON: ${raw.slice(0, 200)}`);\n}\n\nconst results = $('Qdrant Vector Search').first().json.results || [];\nconst query   = $('Validate Input').first().json.query;\n\nreturn {\n  json: {\n    query,\n    answer:     parsed.answer     || 'No answer generated.',\n    sources:    parsed.sources    || [],\n    confidence: parsed.confidence || 'Unknown',\n    result_count: results.length,\n    retrieved_papers: results.map(r => ({\n      title:         r.title,\n      url:           r.url,\n      score:         r.score,\n      tags:          r.tags,\n      thumbnail_url: r.thumbnail_url\n    }))\n  }\n};\n"
+      }
+    },
+    {
+      "id": "respond-webhook-id",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "search-error-id",
+      "name": "Search Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        820,
+        500
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 500,
+        "responseBody": "={{ JSON.stringify({ error: $json.message || 'Internal error', query: $('Validate Input').first()?.json?.query || null }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Search Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Embed Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Query": {
+      "main": [
+        [
+          {
+            "node": "Merge Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Embedding": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Vector Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Search": {
+      "main": [
+        [
+          {
+            "node": "GPT-4o Answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPT-4o Answer": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": [
+    {
+      "name": "search"
+    },
+    {
+      "name": "rag"
+    }
+  ]
+}
