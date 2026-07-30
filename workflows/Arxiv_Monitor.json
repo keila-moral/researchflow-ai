@@ -543,6 +543,206 @@
         "mode": "runOnceForEachItem",
         "jsCode": "const https = require('https');\nconst http = require('http');\nconst fs = require('fs');\nconst path = require('path');\n\nconst signedUrl = $json.thumbnail_url;\n\n// If no thumbnail was generated (e.g. DALL-E was skipped), pass through\nif (!signedUrl) {\n  return { json: { ...$json, thumbnail_url: '' } };\n}\n\n// Derive a stable filename from the arXiv paper ID\n// $json.id looks like 'https://arxiv.org/abs/2401.12345'\nconst paperId = ($json.id || '').split('/').pop().replace(/[^a-zA-Z0-9._-]/g, '_');\nconst filename = `${paperId}.png`;\nconst dir = '/home/node/.n8n/static/thumbnails';\nconst filepath = path.join(dir, filename);\n\n// Ensure directory exists\nif (!fs.existsSync(dir)) {\n  fs.mkdirSync(dir, { recursive: true });\n}\n\n// Download the image\nawait new Promise((resolve, reject) => {\n  const protocol = signedUrl.startsWith('https') ? https : http;\n  const file = fs.createWriteStream(filepath);\n  protocol.get(signedUrl, (res) => {\n    // Follow a single redirect (DALL-E CDN sometimes redirects)\n    if (res.statusCode === 301 || res.statusCode === 302) {\n      const redirectProto = res.headers.location.startsWith('https') ? https : http;\n      redirectProto.get(res.headers.location, (res2) => {\n        res2.pipe(file);\n        file.on('finish', () => { file.close(); resolve(); });\n      }).on('error', reject);\n    } else {\n      res.pipe(file);\n      file.on('finish', () => { file.close(); resolve(); });\n    }\n  }).on('error', (err) => {\n    fs.unlink(filepath, () => {});\n    reject(err);\n  });\n});\n\n// Build the permanent public URL\n// n8n serves /home/node/.n8n/static/* at https://<host>/static/*\nconst domain = $vars.N8N_DOMAIN || 'localhost:5678';\nconst permanentUrl = `https://${domain}/static/thumbnails/${filename}`;\n\nreturn {\n  json: {\n    ...$json,\n    thumbnail_url: permanentUrl,\n    thumbnail_filename: filename,\n  }\n};\n"
       }
+    },
+    {
+      "id": "relevance-router-id",
+      "name": "Relevance Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1900,
+        420
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.relevance }}",
+                    "rightValue": "High",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "0"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.relevance }}",
+                    "rightValue": "Medium",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "1"
+            }
+          ]
+        },
+        "fallbackOutput": "extra"
+      }
+    },
+    {
+      "id": "set-empty-thumbnail-id",
+      "name": "Set Empty Thumbnail",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        2100,
+        560
+      ],
+      "parameters": {
+        "mode": "manual",
+        "fields": {
+          "values": [
+            {
+              "name": "thumbnail_url",
+              "type": "string",
+              "stringValue": ""
+            },
+            {
+              "name": "thumbnail_filename",
+              "type": "string",
+              "stringValue": ""
+            }
+          ]
+        },
+        "options": {
+          "include": "all"
+        }
+      }
+    },
+    {
+      "id": "notify-switch-id",
+      "name": "Notify Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        2650,
+        420
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.relevance }}",
+                    "rightValue": "High",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "0"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.relevance }}",
+                    "rightValue": "Medium",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "1"
+            }
+          ]
+        },
+        "fallbackOutput": "extra"
+      }
+    },
+    {
+      "id": "telegram-compact-id",
+      "name": "Send Telegram Compact",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        560
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=📄 *{{ $json.title }}*\n\n{{ $json.parsed.what_it_does }}\n\n🏷️ *Tags:* {{ $json.tags_string }} · 📊 {{ $json.relevance }}\n🔗 {{ $json.link }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": true
+        }
+      }
+    },
+    {
+      "id": "discord-compact-id",
+      "name": "Send Discord Compact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2850,
+        700
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "embeds": [
+            {
+              "title": "={{ $json.title }}",
+              "description": "={{ $json.parsed.what_it_does }}",
+              "url": "={{ $json.link }}",
+              "color": 7506394,
+              "fields": [
+                {
+                  "name": "🏷️ Tags",
+                  "value": "={{ $json.tags_string }}",
+                  "inline": true
+                },
+                {
+                  "name": "📊 Relevance",
+                  "value": "={{ $json.relevance }}",
+                  "inline": true
+                }
+              ],
+              "footer": {
+                "text": "ResearchFlow AI • arXiv · Medium relevance"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
     }
   ],
   "connections": {
@@ -667,7 +867,7 @@
       "main": [
         [
           {
-            "node": "Generate Thumbnail",
+            "node": "Relevance Router",
             "type": "main",
             "index": 0
           }
@@ -700,12 +900,7 @@
       "main": [
         [
           {
-            "node": "Send Telegram Notification",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Send Discord Notification",
+            "node": "Notify Switch",
             "type": "main",
             "index": 0
           }
@@ -808,6 +1003,70 @@
         [
           {
             "node": "Qdrant Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Relevance Router": {
+      "main": [
+        [
+          {
+            "node": "Generate Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Empty Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Qdrant Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Empty Thumbnail": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Switch": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Discord Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Telegram Compact",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Discord Compact",
             "type": "main",
             "index": 0
           }
