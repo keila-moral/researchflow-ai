@@ -462,7 +462,30 @@
         "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
         "text": "=📄 *{{ $json.title }}*\n\n{{ $json.parsed.telegram_summary }}\n\n📊 *Relevance:* {{ $json.relevance }}\n🏷️ *Tags:* {{ $json.tags_string }}\n🖼️ {{ $json.thumbnail_url }}\n🔗 {{ $json.link }}",
         "additionalFields": {
-          "parse_mode": "Markdown"
+          "parse_mode": "Markdown",
+          "replyMarkup": "inlineKeyboard",
+          "inlineKeyboard": {
+            "rows": [
+              {
+                "row": {
+                  "buttons": [
+                    {
+                      "text": "🔍 Expand",
+                      "callbackData": "=expand:{{ $json.id }}"
+                    },
+                    {
+                      "text": "⏭ Skip",
+                      "callbackData": "=skip:{{ $json.id }}"
+                    },
+                    {
+                      "text": "🔖 Save",
+                      "callbackData": "=save:{{ $json.id }}"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
         }
       },
       "credentials": {
