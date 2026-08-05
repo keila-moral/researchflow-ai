@@ -12,7 +12,8 @@
       ],
       "parameters": {
         "updates": [
-          "message"
+          "message",
+          "callback_query"
         ],
         "additionalFields": {}
       }
@@ -28,7 +29,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const text  = ($json.message?.text || '').trim();\nconst chatId = $json.message?.chat?.id?.toString() || '';\nconst msgId  = $json.message?.message_id;\n\nlet command = 'unknown';\nlet args    = '';\n\nif (text.startsWith('/search')) {\n  command = 'search';\n  args    = text.replace(/^\\/search\\s*/i, '').trim();\n} else if (text.startsWith('/latest')) {\n  command = 'latest';\n  const match = text.match(/(\\d+)/);\n  args = match ? match[1] : '5';\n} else if (text.startsWith('/help')) {\n  command = 'help';\n}\n\nreturn { json: { command, args, chatId, msgId, originalText: text } };\n"
+        "jsCode": "// Handle both regular messages and inline keyboard callbacks\nconst msg      = $json.message;\nconst callback = $json.callback_query;\n\nlet command, args, chatId, msgId, callbackQueryId;\n\nif (callback) {\n  // Inline keyboard button pressed\n  const data = callback.data || '';\n  const colonIdx = data.indexOf(':');\n  command         = colonIdx >= 0 ? data.slice(0, colonIdx) : data;\n  args            = colonIdx >= 0 ? data.slice(colonIdx + 1) : '';\n  chatId          = callback.message?.chat?.id?.toString() || '';\n  msgId           = callback.message?.message_id;\n  callbackQueryId = callback.id;\n} else {\n  // Regular text message\n  const text = (msg?.text || '').trim();\n  chatId = msg?.chat?.id?.toString() || '';\n  msgId  = msg?.message_id;\n  callbackQueryId = null;\n\n  if (text.startsWith('/search')) {\n    command = 'search';\n    args    = text.replace(/^\\/search\\s*/i, '').trim();\n  } else if (text.startsWith('/latest')) {\n    command = 'latest';\n    const match = text.match(/(\\d+)/);\n    args = match ? match[1] : '5';\n  } else if (text.startsWith('/help')) {\n    command = 'help';\n    args    = '';\n  } else {\n    command = 'unknown';\n    args    = '';\n  }\n}\n\nreturn { json: { command, args, chatId, msgId, callbackQueryId } };\n"
       }
     },
     {
@@ -97,6 +98,60 @@
                 ]
               },
               "outputKey": "2"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "expand",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "4"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "5"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "save",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "6"
             }
           ]
         },
@@ -215,6 +270,141 @@
           "disable_web_page_preview": true
         }
       }
+    },
+    {
+      "id": "answer-callback-id",
+      "name": "Answer Callback Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        860,
+        720
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $vars.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "callback_query_id": "={{ $json.callbackQueryId }}",
+          "text": "={{ $json.command === 'expand' ? '🔍 Fetching deep summary...' : $json.command === 'skip' ? '⏭ Marked as skipped' : '🔖 Saved to your library' }}"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "handle-expand-id",
+      "name": "Handle Expand",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        580
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Fetch the paper from Qdrant by URL, then call OpenAI\n// for a deeper summary including methodology and limitations.\nconst paperUrl = $json.args;\nconst chatId   = $json.chatId;\n\n// 1. Search Qdrant for the paper by URL metadata field\nconst searchResp = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify({\n    filter: {\n      must: [{ key: 'metadata.url', match: { value: paperUrl } }]\n    },\n    limit: 1,\n    with_payload: true\n  })\n});\n\nconst searchData = await searchResp.json();\nconst point = searchData.result?.points?.[0];\n\nif (!point) {\n  return { json: { chatId, text: '❌ Paper not found in the database.' } };\n}\n\nconst meta   = point.payload?.metadata || point.payload || {};\nconst title  = meta.title  || 'Unknown title';\nconst stored = point.payload?.document || meta.abstract || '';\n\n// 2. Call GPT-4o for a deeper analysis\nconst gptResp = await fetch('https://api.openai.com/v1/chat/completions', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'Authorization': `Bearer ${$vars.OPENAI_API_KEY}`\n  },\n  body: JSON.stringify({\n    model: 'gpt-4o',\n    max_tokens: 800,\n    messages: [\n      {\n        role: 'system',\n        content: 'You are a research assistant. Given a paper summary, produce a deeper analysis covering: (1) Methodology in detail — architecture, training procedure, key equations if any; (2) Limitations and open questions; (3) Practical applications; (4) Related work it builds on. Be technical but concise. Use plain text, no markdown headers.'\n      },\n      {\n        role: 'user',\n        content: `Title: ${title}\\n\\nSummary:\\n${stored}`\n      }\n    ]\n  })\n});\n\nconst gptData = await gptResp.json();\nconst analysis = gptData.choices?.[0]?.message?.content || 'Could not generate analysis.';\n\nconst text = [\n  `🔍 *Deep analysis: ${title}*`,\n  '',\n  analysis,\n  '',\n  `🔗 ${paperUrl}`\n].join('\\n');\n\nreturn { json: { chatId, text } };\n"
+      }
+    },
+    {
+      "id": "handle-skip-id",
+      "name": "Handle Skip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        720
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Find the Qdrant point for this paper and set user_rating: -1\nconst paperUrl = $json.args;\nconst chatId   = $json.chatId;\n\n// Scroll to find the point ID\nconst scrollResp = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify({\n    filter: { must: [{ key: 'metadata.url', match: { value: paperUrl } }] },\n    limit: 1,\n    with_payload: false\n  })\n});\n\nconst scrollData = await scrollResp.json();\nconst pointId = scrollData.result?.points?.[0]?.id;\n\nif (!pointId) {\n  return { json: { chatId, text: '❌ Paper not found — cannot update rating.' } };\n}\n\n// PATCH the payload\nconst patchResp = await fetch(`http://qdrant:6333/collections/arxiv_papers/points/payload`, {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify({\n    payload: { 'metadata.user_rating': -1, 'metadata.user_rated_at': new Date().toISOString() },\n    points: [pointId]\n  })\n});\n\nif (!patchResp.ok) {\n  const err = await patchResp.text();\n  throw new Error(`Qdrant PATCH failed: ${err}`);\n}\n\nreturn { json: { chatId, text: '⏭ Got it — this paper will be deprioritised in future searches.' } };\n"
+      }
+    },
+    {
+      "id": "handle-save-id",
+      "name": "Handle Save",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        860
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Find the Qdrant point for this paper and set user_rating: 1\nconst paperUrl = $json.args;\nconst chatId   = $json.chatId;\n\nconst scrollResp = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify({\n    filter: { must: [{ key: 'metadata.url', match: { value: paperUrl } }] },\n    limit: 1,\n    with_payload: false\n  })\n});\n\nconst scrollData = await scrollResp.json();\nconst pointId = scrollData.result?.points?.[0]?.id;\n\nif (!pointId) {\n  return { json: { chatId, text: '❌ Paper not found — cannot update rating.' } };\n}\n\nconst patchResp = await fetch(`http://qdrant:6333/collections/arxiv_papers/points/payload`, {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify({\n    payload: { 'metadata.user_rating': 1, 'metadata.user_rated_at': new Date().toISOString() },\n    points: [pointId]\n  })\n});\n\nif (!patchResp.ok) {\n  const err = await patchResp.text();\n  throw new Error(`Qdrant PATCH failed: ${err}`);\n}\n\nreturn { json: { chatId, text: '🔖 Saved! This paper is now in your library. It will be used as a quality signal for future prompt tuning.' } };\n"
+      }
+    },
+    {
+      "id": "route-feedback-id",
+      "name": "Route Feedback",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1060,
+        720
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "expand",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "0"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "1"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "save",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "2"
+            }
+          ]
+        },
+        "fallbackOutput": "none"
+      }
     }
   ],
   "connections": {
@@ -266,6 +456,27 @@
         [
           {
             "node": "Unknown Command Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Answer Callback Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Answer Callback Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Answer Callback Query",
             "type": "main",
             "index": 0
           }
@@ -328,6 +539,75 @@
       ]
     },
     "Unknown Command Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer Callback Query": {
+      "main": [
+        [
+          {
+            "node": "Route Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Feedback": {
+      "main": [
+        [
+          {
+            "node": "Handle Expand",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Skip",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Expand": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Skip": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Save": {
       "main": [
         [
           {
