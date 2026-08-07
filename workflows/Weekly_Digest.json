@@ -1,0 +1,293 @@
+{
+  "name": "Weekly Digest",
+  "nodes": [
+    {
+      "id": "weekly-cron-id",
+      "name": "Saturday 9am Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 6"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "date-window-id",
+      "name": "Compute Date Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const now    = new Date();\nconst sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);\nreturn [{\n  json: {\n    since: sevenDaysAgo.toISOString(),\n    until: now.toISOString(),\n    weekLabel: `Week of ${sevenDaysAgo.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}–${now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "fetch-week-papers-id",
+      "name": "Fetch Week Papers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const since = new Date($json.since);\nconst weekLabel = $json.weekLabel;\n\n// Paginate through the full collection\nlet allPoints = [];\nlet offset = null;\nconst pageSize = 100;\n\ndo {\n  const body = { limit: pageSize, with_payload: true };\n  if (offset) body.offset = offset;\n\n  const resp = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'api-key': $vars.QDRANT_API_KEY || ''\n    },\n    body: JSON.stringify(body)\n  });\n\n  if (!resp.ok) {\n    const err = await resp.text();\n    throw new Error(`Qdrant scroll failed: ${err}`);\n  }\n\n  const data = await resp.json();\n  const points = data.result?.points || [];\n  allPoints = allPoints.concat(points);\n  offset = data.result?.next_page_offset || null;\n} while (offset);\n\n// Extract metadata and filter to papers from the last 7 days\n// Fall back to all points if ingested_at is not set (older points)\nconst papers = allPoints\n  .map(p => ({\n    title:         p.payload?.metadata?.title         || p.payload?.title         || 'Untitled',\n    url:           p.payload?.metadata?.url           || p.payload?.url           || '',\n    tags:          p.payload?.metadata?.tags          || p.payload?.tags          || [],\n    relevance:     p.payload?.metadata?.relevance     || p.payload?.relevance     || 'Unknown',\n    what_it_does:  p.payload?.metadata?.what_it_does  || p.payload?.what_it_does  || '',\n    why_it_matters:p.payload?.metadata?.why_it_matters|| p.payload?.why_it_matters|| '',\n    ingested_at:   p.payload?.metadata?.ingested_at   || p.payload?.ingested_at   || null,\n    user_rating:   p.payload?.metadata?.user_rating   || p.payload?.user_rating   || 0\n  }))\n  .filter(p => {\n    if (!p.ingested_at) return false;\n    return new Date(p.ingested_at) >= since;\n  });\n\nif (papers.length === 0) {\n  throw new Error('NO_PAPERS_THIS_WEEK');\n}\n\nreturn [{ json: { papers, weekLabel, total: papers.length } }];\n"
+      }
+    },
+    {
+      "id": "group-by-tag-id",
+      "name": "Group by Tag",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { papers, weekLabel, total } = $json;\n\n// Group papers by their first tag; untagged go to 'Other'\nconst groups = {};\nfor (const paper of papers) {\n  const tagList = Array.isArray(paper.tags) ? paper.tags : [];\n  const primaryTag = tagList[0] || 'Other';\n  if (!groups[primaryTag]) groups[primaryTag] = [];\n  groups[primaryTag].push(paper);\n}\n\n// Sort groups by paper count descending\nconst sortedGroups = Object.entries(groups)\n  .sort((a, b) => b[1].length - a[1].length)\n  .map(([tag, papers]) => ({ tag, papers }));\n\n// Flag saved papers (user_rating: 1) for top-3 picks\nconst savedPapers = papers\n  .filter(p => p.user_rating === 1)\n  .slice(0, 3);\n\n// High-relevance papers for top picks if no saved ones\nconst highPapers = papers\n  .filter(p => p.relevance === 'High' && p.user_rating !== -1)\n  .slice(0, 3);\n\nconst topPicks = savedPapers.length > 0 ? savedPapers : highPapers;\n\nreturn [{ json: { groups: sortedGroups, topPicks, weekLabel, total } }];\n"
+      }
+    },
+    {
+      "id": "gpt-digest-id",
+      "name": "GPT-4o Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        820,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.OPENAI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "gpt-4o",
+          "response_format": {
+            "type": "json_object"
+          },
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ResearchFlow's weekly digest writer. Given a list of research paper groups (grouped by topic tag), write a concise weekly research digest.\n\nFor each group write 2-3 sentences: what the papers in this group are collectively working on, and one concrete insight or trend you notice across them. Be technical but readable.\n\nAlso identify the single most important trend across ALL papers in one sentence.\n\nRespond ONLY with a JSON object:\n{\n  \"overall_trend\": \"One sentence on the dominant theme across all papers this week\",\n  \"group_narratives\": [\n    { \"tag\": \"LLMs\", \"narrative\": \"2-3 sentence narrative for this group\" }\n  ],\n  \"top_3_picks\": [\n    { \"title\": \"Paper title\", \"reason\": \"One sentence on why this is a standout paper\" }\n  ]\n}"
+            },
+            {
+              "role": "user",
+              "content": "=Week: {{ $json.weekLabel }}\nTotal papers: {{ $json.total }}\n\nPaper groups:\n{{ $json.groups.map(g => `[${g.tag}] (${g.papers.length} papers)\\n` + g.papers.map(p => `- ${p.title}: ${p.what_it_does}`).join('\\n')).join('\\n\\n') }}\n\nTop picks (saved or high-relevance):\n{{ $json.topPicks.map(p => `- ${p.title}: ${p.why_it_matters}`).join('\\n') }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "format-digest-id",
+      "name": "Format Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.choices?.[0]?.message?.content || '{}';\n\nlet digest;\ntry {\n  digest = JSON.parse(raw);\n} catch (e) {\n  throw new Error(`GPT-4o returned non-JSON: ${raw.slice(0, 200)}`);\n}\n\nconst weekLabel = $('Group by Tag').first().json.weekLabel;\nconst total     = $('Group by Tag').first().json.total;\n\nconst lines = [\n  `📰 *ResearchFlow Weekly Digest*`,\n  `_${weekLabel} · ${total} papers indexed_`,\n  '',\n  `🌐 *This week's trend:* ${digest.overall_trend || ''}`,\n  ''\n];\n\n// Group narratives\nfor (const g of (digest.group_narratives || [])) {\n  lines.push(`🏷️ *${g.tag}*`);\n  lines.push(g.narrative || '');\n  lines.push('');\n}\n\n// Top 3 picks\nif (digest.top_3_picks?.length > 0) {\n  lines.push('⭐ *Papers of the week*');\n  digest.top_3_picks.forEach((p, i) => {\n    lines.push(`${i + 1}. *${p.title}*`);\n    lines.push(`   _${p.reason}_`);\n  });\n  lines.push('');\n}\n\nlines.push('_Use /search to ask questions about any of these papers._');\n\nreturn [{ json: { text: lines.join('\\n'), weekLabel, total } }];\n"
+      }
+    },
+    {
+      "id": "send-telegram-digest-id",
+      "name": "Send Telegram Digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        1180,
+        180
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": true
+        }
+      }
+    },
+    {
+      "id": "send-discord-digest-id",
+      "name": "Send Discord Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1180,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "username": "ResearchFlow Weekly",
+          "embeds": [
+            {
+              "title": "={{ `📰 Weekly Digest · ${$json.weekLabel}` }}",
+              "description": "={{ $json.text }}",
+              "color": 5814783,
+              "footer": {
+                "text": "={{ `${$json.total} papers indexed this week · ResearchFlow AI` }}"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "no-papers-id",
+      "name": "No Papers This Week",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        460,
+        500
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "📭 *ResearchFlow Weekly Digest*\n\nNo new papers were indexed this week.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Saturday 9am Trigger": {
+      "main": [
+        [
+          {
+            "node": "Compute Date Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Date Window": {
+      "main": [
+        [
+          {
+            "node": "Fetch Week Papers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Week Papers": {
+      "main": [
+        [
+          {
+            "node": "Group by Tag",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Papers This Week",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group by Tag": {
+      "main": [
+        [
+          {
+            "node": "GPT-4o Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPT-4o Digest": {
+      "main": [
+        [
+          {
+            "node": "Format Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Digest": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Digest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Discord Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": [
+    {
+      "name": "digest"
+    },
+    {
+      "name": "weekly"
+    }
+  ]
+}
