@@ -766,6 +766,35 @@
         },
         "options": {}
       }
+    },
+    {
+      "id": "merge-notifications-id",
+      "name": "Merge Notifications",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3100,
+        420
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "log-run-id",
+      "name": "Log Run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Collect run statistics and write to a run_logs Qdrant collection.\n// We reach back to Filter Processed for the full paper list.\nconst startTime = $execution.startedAt\n  ? new Date($execution.startedAt)\n  : new Date();\nconst endTime   = new Date();\nconst durationMs = endTime.getTime() - startTime.getTime();\n\n// Papers that passed dedup and entered the AI pipeline\nlet allProcessed = [];\ntry {\n  allProcessed = $('Filter Processed').all().map(i => i.json);\n} catch(e) { /* node may not have run if nothing passed dedup */ }\n\nconst total       = allProcessed.length;\nconst high        = allProcessed.filter(p => p.relevance === 'High').length;\nconst medium      = allProcessed.filter(p => p.relevance === 'Medium').length;\nconst low         = allProcessed.filter(p => p.relevance === 'Low').length;\nconst fallbacks   = allProcessed.filter(p => p.used_fallback === true).length;\n\n// Papers seen but filtered out by dedup\nlet alreadySeen = 0;\ntry {\n  const merged   = $('Merge Papers').all().length;\n  alreadySeen    = Math.max(0, merged - total);\n} catch(e) {}\n\nconst runId = `run_${startTime.toISOString().replace(/[:.]/g, '-')}`;\n\nconst logRecord = {\n  run_id:        runId,\n  timestamp:     startTime.toISOString(),\n  duration_ms:   durationMs,\n  papers_fetched: total + alreadySeen,\n  already_seen:  alreadySeen,\n  processed:     total,\n  high,\n  medium,\n  low,\n  pdf_fallbacks: fallbacks,\n};\n\n// Upsert into run_logs collection\n// Collection is created automatically on first upsert if it doesn't exist.\nconst upsertResp = await fetch('http://qdrant:6333/collections/run_logs/points', {\n  method: 'PUT',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify({\n    points: [{\n      id:      Math.abs(runId.split('').reduce((a, c) => (a << 5) - a + c.charCodeAt(0), 0)) % 2147483647,\n      vector:  [],\n      payload: logRecord\n    }]\n  })\n});\n\nif (!upsertResp.ok) {\n  // Log failure is non-fatal — don't throw, just surface in output\n  const err = await upsertResp.text();\n  return [{ json: { ...logRecord, log_status: 'failed', error: err } }];\n}\n\n// Send a daily run summary to Telegram\nconst summaryText = [\n  `📊 *ResearchFlow run complete*`,\n  `🗂 Fetched: ${logRecord.papers_fetched} · Already seen: ${alreadySeen} · New: ${total}`,\n  `✅ High: ${high} · ⚡ Medium: ${medium} · 🔇 Low: ${low}`,\n  fallbacks > 0 ? `⚠️ PDF fallbacks: ${fallbacks}` : null,\n  `⏱ Duration: ${(durationMs / 1000).toFixed(1)}s`\n].filter(Boolean).join('\\n');\n\nawait fetch(`https://api.telegram.org/bot${$vars.TELEGRAM_BOT_TOKEN}/sendMessage`, {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    chat_id:    $vars.TELEGRAM_CHAT_ID,\n    text:       summaryText,\n    parse_mode: 'Markdown'\n  })\n});\n\nreturn [{ json: { ...logRecord, log_status: 'ok' } }];\n"
+      }
     }
   ],
   "connections": {
@@ -926,6 +955,11 @@
             "node": "Notify Switch",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Merge Notifications",
+            "type": "main",
+            "index": 1
           }
         ]
       ]
@@ -1090,6 +1124,61 @@
           },
           {
             "node": "Send Discord Compact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Notification": {
+      "main": [
+        [
+          {
+            "node": "Merge Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Discord Notification": {
+      "main": [
+        [
+          {
+            "node": "Merge Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Compact": {
+      "main": [
+        [
+          {
+            "node": "Merge Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Discord Compact": {
+      "main": [
+        [
+          {
+            "node": "Merge Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Notifications": {
+      "main": [
+        [
+          {
+            "node": "Log Run",
             "type": "main",
             "index": 0
           }
