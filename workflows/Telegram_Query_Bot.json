@@ -29,7 +29,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Handle both regular messages and inline keyboard callbacks\nconst msg      = $json.message;\nconst callback = $json.callback_query;\n\nlet command, args, chatId, msgId, callbackQueryId;\n\nif (callback) {\n  // Inline keyboard button pressed\n  const data = callback.data || '';\n  const colonIdx = data.indexOf(':');\n  command         = colonIdx >= 0 ? data.slice(0, colonIdx) : data;\n  args            = colonIdx >= 0 ? data.slice(colonIdx + 1) : '';\n  chatId          = callback.message?.chat?.id?.toString() || '';\n  msgId           = callback.message?.message_id;\n  callbackQueryId = callback.id;\n} else {\n  // Regular text message\n  const text = (msg?.text || '').trim();\n  chatId = msg?.chat?.id?.toString() || '';\n  msgId  = msg?.message_id;\n  callbackQueryId = null;\n\n  if (text.startsWith('/search')) {\n    command = 'search';\n    args    = text.replace(/^\\/search\\s*/i, '').trim();\n  } else if (text.startsWith('/latest')) {\n    command = 'latest';\n    const match = text.match(/(\\d+)/);\n    args = match ? match[1] : '5';\n  } else if (text.startsWith('/help')) {\n    command = 'help';\n    args    = '';\n  } else {\n    command = 'unknown';\n    args    = '';\n  }\n}\n\nreturn { json: { command, args, chatId, msgId, callbackQueryId } };\n"
+        "jsCode": "const msg      = $json.message;\nconst callback = $json.callback_query;\n\nlet command, args, chatId, msgId, callbackQueryId;\n\nif (callback) {\n  const data      = callback.data || '';\n  const colonIdx  = data.indexOf(':');\n  command         = colonIdx >= 0 ? data.slice(0, colonIdx) : data;\n  args            = colonIdx >= 0 ? data.slice(colonIdx + 1) : '';\n  chatId          = callback.message?.chat?.id?.toString() || '';\n  msgId           = callback.message?.message_id;\n  callbackQueryId = callback.id;\n} else {\n  const text = (msg?.text || '').trim();\n  chatId = msg?.chat?.id?.toString() || '';\n  msgId  = msg?.message_id;\n  callbackQueryId = null;\n\n  if (text.startsWith('/search')) {\n    command = 'search';\n    args    = text.replace(/^\\/search\\s*/i, '').trim();\n  } else if (text.startsWith('/latest')) {\n    command = 'latest';\n    const match = text.match(/(\\d+)/);\n    args = match ? match[1] : '5';\n  } else if (text.startsWith('/stats')) {\n    command = 'stats';\n    args    = '';\n  } else if (text.startsWith('/help')) {\n    command = 'help';\n    args    = '';\n  } else {\n    command = 'unknown';\n    args    = '';\n  }\n}\n\nreturn { json: { command, args, chatId, msgId, callbackQueryId } };\n"
       }
     },
     {
@@ -98,6 +98,24 @@
                 ]
               },
               "outputKey": "2"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "3"
             },
             {
               "conditions": {
@@ -234,7 +252,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const chatId = $json.chatId;\nconst text = [\n  '🤖 *ResearchFlow AI — Commands*',\n  '',\n  '`/search <question>` — Ask a question and get a cited answer from stored papers',\n  '_Example: /search How do mixture of experts models scale?_',\n  '',\n  '`/latest [n]` — Show the n most recently ingested papers (default 5, max 10)',\n  '_Example: /latest 3_',\n  '',\n  '`/help` — Show this message'\n].join('\\n');\nreturn { json: { chatId, text } };\n"
+        "jsCode": "const chatId = $json.chatId;\nconst text = [\n  '🤖 *ResearchFlow AI — Commands*',\n  '',\n  '`/search <question>` — Ask a question and get a cited answer from stored papers',\n  '_Example: /search How do mixture of experts models scale?_',\n  '',\n  '`/latest [n]` — Show the n most recently ingested papers (default 5, max 10)',\n  '_Example: /latest 3_',\n  '',\n  '`/stats` — Show a 7-day run summary (papers indexed, relevance breakdown, fallback rate)',\n  '',\n  '`/help` — Show this message'\n].join('\\n');\nreturn { json: { chatId, text } };\n"
       }
     },
     {
@@ -405,6 +423,20 @@
         },
         "fallbackOutput": "none"
       }
+    },
+    {
+      "id": "fetch-stats-id",
+      "name": "Fetch Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        720
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const chatId = $json.chatId;\n\n// Scroll the run_logs collection — small collection, no pagination needed\nconst resp = await fetch('http://qdrant:6333/collections/run_logs/points/scroll', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'api-key': $vars.QDRANT_API_KEY || ''\n  },\n  body: JSON.stringify({ limit: 100, with_payload: true })\n});\n\nif (!resp.ok) {\n  const err = await resp.text();\n  return { json: { chatId, text: `❌ Could not fetch stats: ${err}` } };\n}\n\nconst data   = await resp.json();\nconst points = data.result?.points || [];\n\nif (points.length === 0) {\n  return { json: { chatId, text: '📊 No runs logged yet. Stats will appear after the first pipeline run.' } };\n}\n\n// Filter to last 7 days\nconst since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);\nconst recentRuns = points\n  .map(p => p.payload)\n  .filter(p => p?.timestamp && new Date(p.timestamp) >= since7d)\n  .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));\n\nconst allRuns = points.map(p => p.payload).filter(Boolean);\n\nif (recentRuns.length === 0) {\n  return { json: { chatId, text: '📊 No runs in the last 7 days.' } };\n}\n\n// Aggregate\nconst sum = (arr, key) => arr.reduce((a, r) => a + (r[key] || 0), 0);\nconst totalFetched   = sum(recentRuns, 'papers_fetched');\nconst totalNew       = sum(recentRuns, 'processed');\nconst totalSeen      = sum(recentRuns, 'already_seen');\nconst totalHigh      = sum(recentRuns, 'high');\nconst totalMedium    = sum(recentRuns, 'medium');\nconst totalLow       = sum(recentRuns, 'low');\nconst totalFallbacks = sum(recentRuns, 'pdf_fallbacks');\nconst avgDuration    = recentRuns.reduce((a, r) => a + (r.duration_ms || 0), 0) / recentRuns.length;\nconst fallbackRate   = totalNew > 0 ? ((totalFallbacks / totalNew) * 100).toFixed(1) : '0.0';\n\n// Last 7 runs table\nconst runRows = recentRuns.slice(0, 7).map(r => {\n  const date = new Date(r.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });\n  return `  ${date}: ${r.processed ?? 0} new (H:${r.high ?? 0} M:${r.medium ?? 0} L:${r.low ?? 0})`;\n}).join('\\n');\n\nconst text = [\n  `📊 *ResearchFlow — 7-day stats* (${recentRuns.length} runs)`,\n  '',\n  `📥 Fetched: ${totalFetched} · Already seen: ${totalSeen} · New: ${totalNew}`,\n  `✅ High: ${totalHigh} · ⚡ Medium: ${totalMedium} · 🔇 Low: ${totalLow}`,\n  `⚠️ PDF fallback rate: ${fallbackRate}%`,\n  `⏱ Avg run time: ${(avgDuration / 1000).toFixed(1)}s`,\n  '',\n  '*Recent runs:*',\n  runRows,\n  '',\n  `📦 Total runs logged: ${allRuns.length}`\n].join('\\n');\n\nreturn { json: { chatId, text } };\n"
+      }
     }
   ],
   "connections": {
@@ -455,11 +487,12 @@
         ],
         [
           {
-            "node": "Unknown Command Reply",
+            "node": "Fetch Stats",
             "type": "main",
             "index": 0
           }
         ],
+        [],
         [
           {
             "node": "Answer Callback Query",
@@ -608,6 +641,17 @@
       ]
     },
     "Handle Save": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Stats": {
       "main": [
         [
           {
