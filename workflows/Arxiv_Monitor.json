@@ -126,7 +126,7 @@
     },
     {
       "parameters": {
-        "jsCode": "for (const item of $input.all()) {\n  const paperId = item.json.id;\n  try {\n    const response = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json'\n      },\n      body: JSON.stringify({\n        filter: {\n          should: [\n            {\n              key: \"metadata.url\",\n              match: {\n                value: paperId\n              }\n            },\n            {\n              key: \"url\",\n              match: {\n                value: paperId\n              }\n            }\n          ]\n        },\n        limit: 1\n      })\n    });\n    \n    if (response.ok) {\n      const data = await response.json();\n      const points = data.result?.points || [];\n      item.json.already_processed = points.length > 0;\n    } else {\n      item.json.already_processed = false;\n    }\n  } catch (error) {\n    item.json.already_processed = false;\n  }\n}\nreturn $input.all();"
+        "jsCode": "for (const item of $input.all()) {\n  const paperId = item.json.id;\n  try {\n    const response = await fetch('http://qdrant:6333/collections/arxiv_papers/points/scroll', {\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'api-key': $vars.QDRANT_API_KEY || ''\n      },\n      body: JSON.stringify({\n        filter: {\n          must: [\n            {\n              key: 'metadata.url',\n              match: { value: paperId }\n            }\n          ]\n        },\n        limit: 1\n      })\n    });\n\n    if (response.ok) {\n      const data = await response.json();\n      const points = data.result?.points || [];\n      item.json.already_processed = points.length > 0;\n    } else {\n      item.json.already_processed = false;\n    }\n  } catch (error) {\n    item.json.already_processed = false;\n  }\n}\nreturn $input.all();\n"
       },
       "id": "qdrant-check-exists-id",
       "name": "Check If Exists",
@@ -1190,5 +1190,13 @@
   "settings": {
     "executionOrder": "v1",
     "errorWorkflow": "error-handler-workflow-id"
-  }
+  },
+  "tags": [
+    {
+      "name": "monitor"
+    },
+    {
+      "name": "ingest"
+    }
+  ]
 }
