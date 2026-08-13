@@ -79,5 +79,13 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "id": "error-handler-workflow-id"
+  "id": "error-handler-workflow-id",
+  "tags": [
+    {
+      "name": "monitor"
+    },
+    {
+      "name": "errors"
+    }
+  ]
 }
