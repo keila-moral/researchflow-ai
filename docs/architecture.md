@@ -1,6 +1,6 @@
 # ResearchFlow AI — Architecture
 
-This document describes the full data flow, node-level design, and key decisions across all four workflows.
+This document describes the full data flow, node-level design, and key decisions across all five workflows.
 
 ---
 
@@ -22,11 +22,11 @@ This document describes the full data flow, node-level design, and key decisions
 └─────────────────────────────────────────────────────┘
 ```
 
-Traefik handles TLS termination (Let's Encrypt) and proxies all traffic to n8n. Qdrant is not exposed externally — n8n reaches it over the internal Docker network at `http://qdrant:6333`. Qdrant API key authentication is enabled.
+Traefik handles TLS termination (Let's Encrypt) and proxies all traffic to n8n. Qdrant is not exposed externally — n8n reaches it over the internal Docker network at `http://qdrant:6333`. Qdrant API key authentication is enabled on all collection endpoints.
 
 ---
 
-## Workflow 1 — Arxiv Monitor (29 nodes)
+## Workflow 1 — Arxiv Monitor (31 nodes)
 
 ### Full data flow
 
@@ -56,7 +56,7 @@ Define Categories ──▶ Loop Categories ──▶ Wait (3s) ──▶ Fetch 
                           Get PDF URL
                               │
                               ▼
-                         Download PDF ──[error]──▶ PDF Fallback
+                         Download PDF ──[error]──▶ PDF Fallback (Abstract Only)
                               │                        │
                               ▼                        │
                     Summarization Chain ──[error]──▶───┘
@@ -87,50 +87,61 @@ Define Categories ──▶ Loop Categories ──▶ Wait (3s) ──▶ Fetch 
                               │                      │
                               └──────────────────────┤
                                                      ▼
-                                               Qdrant Store
-                                                     │
-                                               Notify Switch
-                                          ┌──────────┴──────────┐
-                                        High                  Medium
-                                          │                      │
-                              ┌───────────┘           ┌──────────┘
-                              ▼                       ▼
-                  Send Telegram Notification   Send Telegram Compact
-                  Send Discord Notification    Send Discord Compact
+                                               Qdrant Store ──────────────────┐
+                                                     │                        │
+                                               Notify Switch          (input 1 for Low path)
+                                          ┌──────────┴──────────┐            │
+                                        High                  Medium          │
+                                          │                      │            │
+                              ┌───────────┘           ┌──────────┘            │
+                              ▼                       ▼                       │
+                  Send Telegram Notification   Send Telegram Compact           │
+                  Send Discord Notification    Send Discord Compact            │
+                              │                       │                       │
+                              └───────────┬───────────┘                       │
+                                          ▼                                   │
+                                 Merge Notifications ◀─────────────────────────┘
+                                          │
+                                          ▼
+                                       Log Run
+                              (run_logs Qdrant collection
+                               + Telegram daily summary)
 ```
 
 ### Stage notes
 
 **Ingest loop**
-Six arXiv categories are defined in `Define Categories` and iterated by `Loop Categories`. A 3-second `Wait` node between iterations respects arXiv's API rate limits. `Process Results` normalises the raw Atom/XML response into a flat JSON array of papers.
+Six arXiv categories are defined in `Define Categories` and iterated by `Loop Categories`. A 3-second `Wait` node between iterations respects arXiv's API rate limits. `Process Results` normalises the Atom/XML response into a flat JSON array.
 
 **Deduplication**
-`Check If Exists` queries Qdrant's `arxiv_papers` collection for the paper's arXiv ID before processing. `Filter Processed` drops any paper that already has a matching point, preventing re-summarisation of papers seen in previous runs.
+`Check If Exists` queries Qdrant's `arxiv_papers` collection for the paper's arXiv ID using a `must` filter on `metadata.url`. `Filter Processed` drops any paper that already has a matching point.
 
 **PDF pipeline**
-`Get PDF URL` derives the PDF link from the arXiv abstract URL (`/abs/` → `/pdf/`). `Download PDF` fetches the binary. The LangChain `Summarization Chain` (map-reduce strategy, `gpt-4o-mini`) handles long papers by chunking the text and reducing chunk summaries to a single passage, which is then passed to `OpenAI Summarize`.
+`Get PDF URL` derives the PDF link (`/abs/` → `/pdf/`). `Download PDF` fetches the binary. The LangChain `Summarization Chain` (map-reduce, `gpt-4o-mini`) handles long papers by chunking and reducing to a single passage for `OpenAI Summarize`.
 
 **PDF fallback**
-If `Download PDF` or `Summarization Chain` fails (network error, malformed PDF, timeout), the error branch routes to `PDF Fallback (Abstract Only)`. This node reconstructs the same `{ response: { text } }` shape using the paper's abstract, sets `used_fallback: true`, and rejoins the main path at `OpenAI Summarize`. Notifications include a ⚠️ warning when the fallback was used.
+If `Download PDF` or `Summarization Chain` fails, the error branch routes to `PDF Fallback (Abstract Only)`. This node reconstructs the expected `{ response: { text } }` shape using the abstract, sets `used_fallback: true`, and rejoins at `OpenAI Summarize`. Notifications include a ⚠️ warning.
 
 **Structured summary (JSON mode)**
-`OpenAI Summarize` uses `gpt-4o` with `response_format: json_object`. The prompt enforces a schema with six fields: `what_it_does`, `how_it_works`, `why_it_matters`, `relevance` (Low/Medium/High), `tags[]`, and `telegram_summary`. `Extract Tags` parses the JSON and exposes `tags` as a native array and `relevance` as a top-level field.
+`OpenAI Summarize` uses `gpt-4o` with `response_format: json_object`. Output schema: `what_it_does`, `how_it_works`, `why_it_matters`, `relevance` (Low/Medium/High), `tags[]`, `telegram_summary`. `Extract Tags` parses the JSON and exposes typed fields.
 
 **Relevance routing**
-`Relevance Router` (Switch node) branches on the `relevance` field:
-- **High** — full path: DALL-E 3 thumbnail generated, downloaded, persisted to `/home/node/.n8n/static/thumbnails/` (served at `https://<N8N_DOMAIN>/static/thumbnails/<id>.png`), then stored in Qdrant. Full Telegram + Discord notification with thumbnail and all summary sections.
-- **Medium** — thumbnail skipped (`Set Empty Thumbnail` passes an empty string). Stored in Qdrant. Compact Telegram + Discord notification (title, `what_it_does`, tags, link).
+`Relevance Router` branches on `relevance`:
+- **High** — DALL-E 3 thumbnail generated, downloaded, persisted to `/home/node/.n8n/static/thumbnails/`, stored in Qdrant. Full Telegram + Discord notification with inline keyboard buttons (Expand / Skip / Save).
+- **Medium** — thumbnail skipped (`Set Empty Thumbnail`). Compact Telegram + Discord notification.
 - **Low** — stored in Qdrant silently. No notification.
 
-**Qdrant metadata schema**
-Each point stored in `arxiv_papers` has the following payload fields:
+**Observability**
+All four notification nodes and the Qdrant Store (for Low-path items) fan into `Merge Notifications`, then `Log Run`. `Log Run` writes a structured record to the `run_logs` Qdrant collection and sends a daily summary to Telegram.
+
+**Qdrant metadata schema — `arxiv_papers` collection**
 
 | Field | Source |
 |---|---|
 | `title` | arXiv API |
 | `url` | arXiv paper ID (canonical link) |
-| `tags` | GPT-4o JSON output |
-| `relevance` | GPT-4o JSON output |
+| `tags` | GPT-4o JSON output (array) |
+| `relevance` | GPT-4o JSON output (Low/Medium/High) |
 | `thumbnail_url` | Persist Thumbnail node (permanent static URL) |
 | `thumbnail_filename` | Persist Thumbnail node |
 | `category` | Define Categories node |
@@ -139,6 +150,22 @@ Each point stored in `arxiv_papers` has the following payload fields:
 | `how_it_works` | GPT-4o JSON output |
 | `why_it_matters` | GPT-4o JSON output |
 | `used_fallback` | PDF Fallback node (`"true"` / `"false"`) |
+| `user_rating` | Telegram bot feedback (1 = saved, -1 = skipped) |
+| `user_rated_at` | Telegram bot feedback (ISO timestamp) |
+| `ingested_at` | Log Run / Store node (ISO timestamp) |
+
+**Qdrant metadata schema — `run_logs` collection**
+
+| Field | Description |
+|---|---|
+| `run_id` | Unique ID derived from execution start time |
+| `timestamp` | ISO start time of the run |
+| `duration_ms` | Total run duration in milliseconds |
+| `papers_fetched` | Total papers returned by arXiv API |
+| `already_seen` | Papers filtered by dedup |
+| `processed` | Papers that entered the AI pipeline |
+| `high` / `medium` / `low` | Count by relevance tier |
+| `pdf_fallbacks` | Papers that used abstract-only fallback |
 
 ---
 
@@ -152,7 +179,7 @@ POST /webhook/search
          │
          ▼
    Validate Input
-   (guard + clamp top_k)
+   (guard + clamp top_k to 1-20)
          │
          ▼
     Embed Query
@@ -164,9 +191,10 @@ POST /webhook/search
          │
          ▼
  Qdrant Vector Search ──[error]──▶ Search Error Response (HTTP 500)
- (cosine similarity,               
-  score threshold 0.35,            
-  optional tag filter)             
+ (cosine similarity,
+  score threshold 0.35,
+  optional tag filter,
+  Qdrant API key auth)
          │
          ▼
   GPT-4o Answer ──[error]──▶ Search Error Response (HTTP 500)
@@ -183,64 +211,112 @@ POST /webhook/search
 
 ### Design notes
 
-**Embedding model**: `text-embedding-3-small` (1536 dimensions) is used for both ingestion (via Qdrant's built-in embedding during store) and query-time embedding. Keeping the same model at both ends is essential for cosine similarity to be meaningful.
+**Embedding model**: `text-embedding-3-small` (1536 dimensions) is used at both ingestion and query time. Consistent model choice is essential for cosine similarity to be meaningful.
 
-**Score threshold**: `0.35` filters out low-similarity results before they reach GPT-4o. Lowering this increases recall at the cost of answer quality; raising it improves precision but may return zero results for niche queries.
+**Score threshold**: `0.35` filters out low-similarity results. Lower = more recall, less precision; higher = fewer but more relevant results.
 
-**JSON mode on the answer**: GPT-4o returns `{ answer, sources[], confidence }`. `confidence` is a self-reported High/Medium/Low that reflects how well the retrieved papers actually address the question — useful for surfacing cases where the vector store doesn't yet contain relevant papers.
-
-**Error handling**: Both `Qdrant Vector Search` and `GPT-4o Answer` have error output branches wired to `Search Error Response`, which returns a structured `{ error, query }` JSON with HTTP 500. This prevents the webhook from hanging on a silent failure.
+**JSON mode on the answer**: GPT-4o returns `{ answer, sources[], confidence }`. `confidence` (High/Medium/Low) reflects how well the retrieved papers address the question — useful for surfacing cases where the store doesn't yet contain relevant papers.
 
 ---
 
-## Workflow 3 — Telegram Query Bot (10 nodes)
+## Workflow 3 — Telegram Query Bot (16 nodes)
 
 ### Data flow
 
 ```
-Telegram message received
+Telegram message or callback_query
          │
          ▼
    Parse Command
-   (extract command, args, chatId)
+   (handles both message and callback_query events)
          │
          ▼
-   Route Command (Switch)
-    ┌────┼────┬──────┐
-    │    │    │      │
-  /search /latest /help  (unknown)
-    │    │    │      │
-    ▼    ▼    ▼      ▼
- Call  Fetch  Help  Unknown
- Search Latest Reply  Reply
- Webhook Papers
-    │    │    │      │
-    ▼    ▼    └──────┘
- Format Format        │
- Search Latest        │
- Reply  Reply         │
-    │    │            │
-    └────┴────────────┘
-              │
-              ▼
-         Send Reply
-         (Telegram)
+   Route Command (Switch, 7 outputs)
+    ┌────┼────┬────┬──────────────────────┐
+    │    │    │    │    (expand/skip/save callbacks)
+  /search /latest /stats /help             │
+    │    │    │    │                       ▼
+    ▼    ▼    ▼    ▼               Answer Callback Query
+  Call Fetch Fetch Help            (dismiss Telegram spinner)
+  Search Latest Stats Reply               │
+  Webhook Papers                          ▼
+    │    │    │    │              Route Feedback (Switch)
+    ▼    ▼    ▼    │         ┌────────┼────────┐
+  Format Format Format       │        │        │
+  Search Latest Stats      expand   skip     save
+  Reply  Reply  Reply       │        │        │
+    │    │    │    │         ▼        ▼        ▼
+    └────┴────┴────┴──▶ Handle  Handle  Handle
+                        Expand   Skip    Save
+                            │        │        │
+                            └────────┴────────┘
+                                     │
+                                     ▼
+                                 Send Reply
+                              (single Telegram node)
 ```
 
-### Design notes
+### Command handlers
 
-**`/search`** calls the `Semantic_Search_Agent` webhook internally via HTTP Request, passing the user's message text as `query` and `top_k: 5`. The response is formatted as a Telegram Markdown message with source titles as hyperlinks.
+**`/search`** — calls `Semantic_Search_Agent` webhook internally, formats cited answer as Telegram Markdown with source hyperlinks.
 
-**`/latest`** uses Qdrant's scroll API (not vector search) ordered by `metadata.ingested_at` descending. This is a lightweight lookup — no embedding required — and returns a numbered list of recent papers with tags and relevance rating.
+**`/latest`** — Qdrant scroll API ordered by `metadata.ingested_at` descending. Lightweight — no embedding required.
 
-**Single converge node**: All four branches write `{ chatId, text }` and converge at a single `Send Reply` Telegram node. Adding a new command requires only a new branch and a new format node — the send step never needs to change.
+**`/stats`** — scrolls `run_logs` collection, filters to last 7 days, aggregates totals and computes fallback rate.
+
+**`/help`** — static message listing all commands.
+
+**Expand** — fetches paper from Qdrant by `metadata.url`, calls GPT-4o for a deeper analysis (methodology, limitations, related work, practical applications).
+
+**Skip / Save** — scroll Qdrant to find the point ID by `metadata.url`, PATCH payload with `user_rating` and `user_rated_at`. Non-destructive; does not remove the point.
+
+**Single converge node**: all branches write `{ chatId, text }` and converge at `Send Reply`. Adding a new command requires only a new branch — the send step never changes.
 
 ---
 
-## Workflow 4 — Error Handler
+## Workflow 4 — Weekly Digest (9 nodes)
 
-Triggered by n8n's global error trigger. Receives structured error context (workflow name, failing node, error message, execution ID) and fans out to:
-- **Telegram**: alert message to `$vars.TELEGRAM_CHAT_ID`
+### Data flow
+
+```
+Saturday 9am (cron: 0 9 * * 6)
+         │
+         ▼
+Compute Date Window
+(since = 7 days ago, weekLabel)
+         │
+         ▼
+Fetch Week Papers ──[error/empty]──▶ No Papers This Week (Telegram)
+(paginated Qdrant scroll,
+ filter by ingested_at >= since)
+         │
+         ▼
+Group by Tag
+(primary tag, sort by count desc,
+ topPicks: saved papers first, then High)
+         │
+         ▼
+GPT-4o Digest (json_object mode)
+{ overall_trend, group_narratives[], top_3_picks[] }
+         │
+         ▼
+Format Digest
+         │
+    ┌────┴────┐
+    ▼         ▼
+Telegram   Discord
+```
+
+### Design note — top picks preference
+
+`Group by Tag` builds `topPicks` by first checking for papers with `user_rating: 1` (saved via Telegram button). If none exist, it falls back to High-relevance papers. This means user feedback from Day 15–16 directly influences the weekly digest — saved papers surface as recommended reads.
+
+---
+
+## Workflow 5 — Error Handler (3 nodes)
+
+Triggered by n8n's global error trigger. Receives structured error context and fans out to:
+- **Telegram**: alert to `$vars.TELEGRAM_CHAT_ID`
 - **Email**: alert to `$vars.ALERT_TO_EMAIL` from `$vars.ALERT_FROM_EMAIL`
 
 All credentials are read from n8n variables — no hardcoded values in the workflow JSON.
@@ -264,25 +340,30 @@ All credentials are read from n8n variables — no hardcoded values in the workf
 |---|---|
 | `n8n_data` | n8n database, credentials, workflow state |
 | `thumbnails_data` | Persisted DALL-E thumbnails (mounted at `/home/node/.n8n/static/thumbnails/`) |
-| `qdrant_data` | Qdrant vector store |
+| `qdrant_data` | Qdrant vector store (both collections) |
 | `traefik_data` | Let's Encrypt certificates |
 | `backup_data` | Local backup archives |
 
 ### Security
 
-- Qdrant is not published on any host port. n8n reaches it at `http://qdrant:6333` over the internal Docker network.
-- Qdrant API key authentication is enabled via `QDRANT__SERVICE__API_KEY`. n8n workflow nodes pass the key in the `api-key` header.
+- Qdrant publishes no host ports. n8n reaches it at `http://qdrant:6333` over the internal Docker network.
+- Qdrant API key authentication enabled via `QDRANT__SERVICE__API_KEY`. All workflow nodes pass the key in the `api-key` header.
 - All external traffic goes through Traefik with automatic HTTPS.
-- Secrets are passed to n8n as `N8N_VARIABLES_*` environment variables and accessed in workflows via `$vars.*`.
+- Secrets passed to n8n as `N8N_VARIABLES_*` env vars, accessed in workflows via `$vars.*`.
+- n8n thumbnails served at `/static/thumbnails/*` — publicly readable but unguessable (filenames are arXiv IDs).
 
 ---
 
 ## Key design decisions
 
-**Why n8n?** Visual workflow debugging is a significant advantage when building multi-step pipelines — every node's input and output is inspectable at any execution. n8n also provides built-in credential management, scheduling, and webhook hosting, eliminating a lot of glue code.
+**Why n8n?** Visual workflow debugging is a significant advantage when building multi-step pipelines — every node's input and output is inspectable per execution. n8n also provides built-in credential management, scheduling, and webhook hosting, eliminating a lot of glue code.
 
-**Why map-reduce for PDF summarisation?** Research papers regularly exceed GPT-4o's context window in raw PDF-extracted text. A map-reduce chain (chunk → summarise each chunk → reduce to one summary) handles arbitrarily long papers without truncation. `gpt-4o-mini` is used for the map step (cost efficiency); `gpt-4o` for the reduce/final structured output (quality).
+**Why map-reduce for PDF summarisation?** Research papers regularly exceed GPT-4o's context window. A map-reduce chain (chunk → summarise each chunk → reduce) handles arbitrarily long papers without truncation. `gpt-4o-mini` for the map step (cost efficiency); `gpt-4o` for the reduce/structured output (quality).
 
-**Why persist thumbnails to the static file server?** DALL-E 3 returns signed CDN URLs that expire in approximately 60 minutes. Storing those URLs in Qdrant or sending them in Telegram would result in broken images within an hour. Persisting to `/home/node/.n8n/static/thumbnails/` gives a permanent URL served directly by n8n with no additional infrastructure.
+**Why persist thumbnails to the static file server?** DALL-E 3 signed URLs expire in ~60 minutes. Persisting to `/home/node/.n8n/static/thumbnails/` gives a permanent URL served directly by n8n with no additional infrastructure.
 
-**Why a separate Notify Switch after Qdrant Store?** Routing notification format at the end of the pipeline (after storage) rather than at the beginning keeps the storage step uniform — every paper, regardless of relevance, goes through the same Qdrant upsert path. The notification decision is separate from the storage decision.
+**Why a separate Notify Switch after Qdrant Store?** Routing notification format at the end of the pipeline keeps the storage step uniform — every paper goes through the same Qdrant upsert regardless of relevance. The notification decision is decoupled from the storage decision.
+
+**Why inline keyboard buttons instead of text reply parsing?** Callback queries carry structured `callback_data` (`action:paper_url`), so the bot always knows exactly which paper is being acted on without needing to track message IDs or parse free-text replies. It also gives users a better UX — one tap instead of typing.
+
+**Why store run logs in Qdrant?** Keeps the infrastructure minimal — no separate time-series DB or logging service needed. Qdrant's scroll API with payload filters is sufficient for the query patterns `/stats` needs (last N days, aggregate counts). For larger deployments, migrating to a proper TSDB would be appropriate.
